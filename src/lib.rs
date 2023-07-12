@@ -44,6 +44,7 @@ const LUT: [u32; 256] = [
     0xc3414182, 0xb0999929, 0x772d2d5a, 0x110f0f1e, 0xcbb0b07b, 0xfc5454a8, 0xd6bbbb6d, 0x3a16162c,
 ];
 
+/// An AES block.
 #[repr(align(16))]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Block {
@@ -225,6 +226,8 @@ impl<const STRIDE: usize, const STRIDE_INV: usize> SoftAes<STRIDE, STRIDE_INV> {
         Block { w0, w1, w2, w3 }
     }
 
+    /// AES forward round function.
+    /// `rk` is the round key.
     #[inline]
     pub fn block_encrypt(block: &Block, rk: &Block) -> Block {
         let s0 = block.w0;
