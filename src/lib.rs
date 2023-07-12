@@ -1,6 +1,8 @@
 //! Software implementation of the AES round function.
 
-use std::{
+#![no_std]
+
+use core::{
     cmp,
     mem::MaybeUninit,
     ops,
