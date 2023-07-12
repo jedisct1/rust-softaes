@@ -1,6 +1,10 @@
+//! Software implementation of the AES round function.
+
 use std::{
+    cmp,
     mem::MaybeUninit,
-    sync::atomic::{compiler_fence, Ordering},
+    ops,
+    sync::atomic::{self, Ordering},
 };
 
 const LUT: [u32; 256] = [
@@ -39,13 +43,23 @@ const LUT: [u32; 256] = [
 ];
 
 #[repr(align(16))]
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash, Default)]
+#[derive(Copy, Clone, Debug, Default)]
 pub struct Block {
     w0: u32,
     w1: u32,
     w2: u32,
     w3: u32,
 }
+
+impl cmp::PartialEq for Block {
+    #[inline(never)]
+    fn eq(&self, other: &Block) -> bool {
+        let z = self ^ other;
+        z.w0 | z.w1 | z.w2 | z.w3 == 0
+    }
+}
+
+impl cmp::Eq for Block {}
 
 impl Block {
     #[inline(always)]
@@ -110,7 +124,7 @@ impl Block {
     }
 }
 
-impl std::ops::BitAnd for Block {
+impl ops::BitAnd for Block {
     type Output = Block;
 
     #[inline(always)]
@@ -119,12 +133,30 @@ impl std::ops::BitAnd for Block {
     }
 }
 
-impl std::ops::BitXor for Block {
+impl ops::BitAnd for &Block {
+    type Output = Block;
+
+    #[inline(always)]
+    fn bitand(self, rhs: Self) -> Self::Output {
+        self.and(rhs)
+    }
+}
+
+impl ops::BitXor for Block {
     type Output = Block;
 
     #[inline(always)]
     fn bitxor(self, rhs: Self) -> Self::Output {
         self.xor(&rhs)
+    }
+}
+
+impl ops::BitXor for &Block {
+    type Output = Block;
+
+    #[inline(always)]
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        self.xor(rhs)
     }
 }
 
@@ -137,7 +169,7 @@ struct AlignedT<const STRIDE_INV: usize>([[[MaybeUninit<u32>; STRIDE_INV]; 4]; 4
 struct AlignedOf([[MaybeUninit<u8>; 4]; 4]);
 
 impl<const STRIDE: usize, const STRIDE_INV: usize> SoftAes<STRIDE, STRIDE_INV> {
-    const STATIC_ASSERT_STRIDE: usize = (STRIDE_INV == 256 / STRIDE) as usize - 1;
+    const STATIC_ASSERT_STRIDE: usize = (STRIDE_INV == 256 / STRIDE && STRIDE <= 256) as usize - 1;
 
     fn _encrypt(ix0: [u8; 4], ix1: [u8; 4], ix2: [u8; 4], ix3: [u8; 4]) -> Block {
         _ = Self::STATIC_ASSERT_STRIDE;
@@ -153,7 +185,7 @@ impl<const STRIDE: usize, const STRIDE_INV: usize> SoftAes<STRIDE, STRIDE_INV> {
             of.0[j][2].write((ix2[j] as usize % STRIDE) as _);
             of.0[j][3].write((ix3[j] as usize % STRIDE) as _);
         }
-        for i in 0usize..256 / STRIDE as usize {
+        for i in 0usize..256 / STRIDE {
             for j in 0usize..4 {
                 t.0[j][0][i]
                     .write(LUT[(i * STRIDE) | unsafe { of.0[j][0].assume_init() } as usize]);
@@ -166,7 +198,7 @@ impl<const STRIDE: usize, const STRIDE_INV: usize> SoftAes<STRIDE, STRIDE_INV> {
             }
         }
 
-        compiler_fence(Ordering::Acquire);
+        atomic::compiler_fence(Ordering::Acquire);
 
         let mut w0 = unsafe { t.0[0][0][ix0[0] as usize / STRIDE].assume_init() };
         w0 ^= unsafe { t.0[0][1][ix1[0] as usize / STRIDE].assume_init() }.rotate_left(8);
@@ -191,6 +223,7 @@ impl<const STRIDE: usize, const STRIDE_INV: usize> SoftAes<STRIDE, STRIDE_INV> {
         Block { w0, w1, w2, w3 }
     }
 
+    #[inline]
     pub fn block_encrypt(block: &Block, rk: &Block) -> Block {
         let s0 = block.w0;
         let s1 = block.w1;
@@ -225,16 +258,23 @@ impl<const STRIDE: usize, const STRIDE_INV: usize> SoftAes<STRIDE, STRIDE_INV> {
     }
 }
 
+/// Software AES implementation with a stride of 16 words (paranoid protection against side channels)
 pub type SoftAesSlow = SoftAes<16, { 256 / 16 }>;
+
+/// Software AES implementation with a stride of 64 words (practical protection against side channels)
 pub type SoftAesModerate = SoftAes<64, { 256 / 64 }>;
+
+/// Fastest software AES implementation, but with minimal protection against side channels
 pub type SoftAesFast = SoftAes<256, { 256 / 256 }>;
 
 #[test]
-fn test1() {
+fn test() {
     let input_bytes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
     let input = Block::from_bytes(&input_bytes);
-    let rk = Block::from_bytes(&[0u8; 16]);
+    let rk = Block::from_bytes(&[1u8; 16]);
     let output = SoftAesFast::block_encrypt(&input, &rk);
-    dbg!(output.to_bytes());
-    panic!();
+    let expected = Block::from_bytes(&[
+        107, 107, 93, 68, 45, 108, 50, 80, 177, 216, 92, 96, 38, 157, 32, 93,
+    ]);
+    assert_eq!(output, expected);
 }
