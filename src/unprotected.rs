@@ -281,9 +281,9 @@ impl ops::BitXor for &Block {
 }
 
 /// Fastest software AES implementation, but with no protection against side channels
-pub struct SoftAesUnprotected;
+pub struct SoftAes;
 
-impl SoftAesUnprotected {
+impl SoftAes {
     /// AES forward round function.
     /// `rk` is the round key.
     #[inline]
@@ -331,7 +331,7 @@ fn test() {
     let input_bytes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
     let input = Block::from_bytes(&input_bytes);
     let rk = Block::from_bytes(&[1u8; 16]);
-    let output = SoftAesUnprotected::block_encrypt(&input, &rk);
+    let output = SoftAes::block_encrypt(&input, &rk);
     let expected = Block::from_bytes(&[
         107, 107, 93, 68, 45, 108, 50, 80, 177, 216, 92, 96, 38, 157, 32, 93,
     ]);
