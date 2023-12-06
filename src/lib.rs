@@ -269,8 +269,12 @@ pub type SoftAesSlow = SoftAes<16, { 256 / 16 }>;
 /// Software AES implementation with a stride of 64 words (practical protection against side channels)
 pub type SoftAesModerate = SoftAes<64, { 256 / 64 }>;
 
-/// Fastest software AES implementation, but with minimal protection against side channels
+/// Fast software AES implementation, but with minimal protection against side channels
 pub type SoftAesFast = SoftAes<256, { 256 / 256 }>;
+
+mod unprotected;
+/// Fastest software AES implementation, but with no protection against side channels
+pub type SoftAesUnprotected = unprotected::SoftAesUnprotected;
 
 #[test]
 fn test() {
