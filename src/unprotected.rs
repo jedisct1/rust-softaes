@@ -280,6 +280,7 @@ impl ops::BitXor for &Block {
     }
 }
 
+/// Fastest software AES implementation, but with no protection against side channels
 pub struct SoftAesUnprotected;
 
 impl SoftAesUnprotected {
