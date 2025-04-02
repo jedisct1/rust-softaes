@@ -82,7 +82,7 @@ fn sub_word_ct(word: u32) -> u32 {
 
 /// Rotates a 32-bit word left by 8 bits.
 fn rot_word(word: u32) -> u32 {
-    (word << 8) | (word >> 24)
+    word.rotate_left(8)
 }
 
 /// Multiply two bytes in GF(2^8) in constant time.
