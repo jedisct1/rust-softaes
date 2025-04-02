@@ -85,44 +85,86 @@ fn rot_word(word: u32) -> u32 {
     word.rotate_left(8)
 }
 
-/// Multiply two bytes in GF(2^8) in constant time.
-fn gf_mul(mut a: u8, mut b: u8) -> u8 {
-    let mut res = 0u8;
-    let mut i = 0;
-    while i < 8 {
-        // If (b & 1) == 1, add a to result.
-        let mask = ct_eq(b & 1, 1);
-        res ^= a & mask;
-        // Compute xtime(a) = a << 1, conditionally XOR with 0x1b if a’s high bit is set.
-        let hi = ct_eq(a >> 7, 1);
-        a = (a << 1) ^ (0x1b & hi);
-        b >>= 1;
-        i += 1;
-    }
-    res
+/// Multiply a byte by 2 in GF(2^8).
+#[inline(always)]
+fn xtime(x: u8) -> u8 {
+    let x2 = x.wrapping_shl(1);
+    // mask is 0x1b if the top bit of x was 1, else 0
+    // Using signed shift so that the sign bit becomes a mask when cast to u8.
+    let mask = ((x as i8) >> 7) as u8 & 0x1b;
+    x2 ^ mask
 }
 
-/// Applies the inverse MixColumns transformation to one 32-bit word (one column).
-fn inv_mix_word(word: u32) -> u32 {
-    let a0 = ((word >> 24) & 0xFF) as u8;
-    let a1 = ((word >> 16) & 0xFF) as u8;
-    let a2 = ((word >> 8) & 0xFF) as u8;
-    let a3 = (word & 0xFF) as u8;
-    let b0 = gf_mul(a0, 0x0e) ^ gf_mul(a1, 0x0b) ^ gf_mul(a2, 0x0d) ^ gf_mul(a3, 0x09);
-    let b1 = gf_mul(a0, 0x09) ^ gf_mul(a1, 0x0e) ^ gf_mul(a2, 0x0b) ^ gf_mul(a3, 0x0d);
-    let b2 = gf_mul(a0, 0x0d) ^ gf_mul(a1, 0x09) ^ gf_mul(a2, 0x0e) ^ gf_mul(a3, 0x0b);
-    let b3 = gf_mul(a0, 0x0b) ^ gf_mul(a1, 0x0d) ^ gf_mul(a2, 0x09) ^ gf_mul(a3, 0x0e);
-    ((b0 as u32) << 24) | ((b1 as u32) << 16) | ((b2 as u32) << 8) | (b3 as u32)
+/// Multiply a byte by 0x09 in GF(2^8).
+fn mul0x09(x: u8) -> u8 {
+    // 0x09 = 1001₂ = x^3 + 1
+    // so x * 0x09 = x * (x^3 + 1) = x^4 + x
+    // which is xtime(xtime(xtime(x))) ^ x
+    xtime(xtime(xtime(x))) ^ x
+}
+
+/// Multiply a byte by 0x0b in GF(2^8).
+fn mul0x0b(x: u8) -> u8 {
+    // 0x0b = 1011₂ = x^3 + x + 1
+    // x * 0x0b = x * (x^3 + x + 1) = x^4 + x^2 + x
+    // which is xtime(xtime(xtime(x))) ^ xtime(x) ^ x
+    xtime(xtime(xtime(x))) ^ xtime(x) ^ x
+}
+
+/// Multiply a byte by 0x0d in GF(2^8).
+fn mul0x0d(x: u8) -> u8 {
+    // 0x0d = 1101₂ = x^3 + x^2 + 1
+    // x * 0x0d = x^4 + x^3 + x
+    // which is xtime(xtime(xtime(x) ^ x)) ^ x
+    // or equivalently: xtime(xtime(xtime(x))) ^ xtime(xtime(x)) ^ x
+    xtime(xtime(xtime(x) ^ x)) ^ x
+}
+
+/// Multiply a byte by 0x0e in GF(2^8).
+fn mul0x0e(x: u8) -> u8 {
+    // 0x0e = 1110₂ = x^3 + x^2 + x
+    // x * 0x0e = x^4 + x^3 + x^2
+    // which is xtime(xtime(xtime(x) ^ x) ^ x)
+    // or equivalently: xtime(xtime(xtime(x))) ^ xtime(xtime(x)) ^ xtime(x)
+    xtime(xtime(xtime(x) ^ x) ^ x)
 }
 
 /// Applies the inverse MixColumns transformation to an entire Block.
 pub fn inv_mix_block(block: Block) -> Block {
-    Block {
-        w0: inv_mix_word(block.w0),
-        w1: inv_mix_word(block.w1),
-        w2: inv_mix_word(block.w2),
-        w3: inv_mix_word(block.w3),
+    // Extract the 16 bytes from the 4 words (AES state is column-major).
+    let mut state = [0u8; 16];
+    state[0..4].copy_from_slice(&block.w0.to_be_bytes());
+    state[4..8].copy_from_slice(&block.w1.to_be_bytes());
+    state[8..12].copy_from_slice(&block.w2.to_be_bytes());
+    state[12..16].copy_from_slice(&block.w3.to_be_bytes());
+
+    // For each of the 4 columns, apply the InvMixColumns matrix multiplication.
+    // Each column is (a0, a1, a2, a3). The new column (b0, b1, b2, b3) is:
+    //
+    // b0 = 0x0e*a0 ^ 0x0b*a1 ^ 0x0d*a2 ^ 0x09*a3
+    // b1 = 0x09*a0 ^ 0x0e*a1 ^ 0x0b*a2 ^ 0x0d*a3
+    // b2 = 0x0d*a0 ^ 0x09*a1 ^ 0x0e*a2 ^ 0x0b*a3
+    // b3 = 0x0b*a0 ^ 0x0d*a1 ^ 0x09*a2 ^ 0x0e*a3
+    for col in 0..4 {
+        let i = 4 * col;
+        let a0 = state[i + 0];
+        let a1 = state[i + 1];
+        let a2 = state[i + 2];
+        let a3 = state[i + 3];
+
+        state[i + 0] = mul0x0e(a0) ^ mul0x0b(a1) ^ mul0x0d(a2) ^ mul0x09(a3);
+        state[i + 1] = mul0x09(a0) ^ mul0x0e(a1) ^ mul0x0b(a2) ^ mul0x0d(a3);
+        state[i + 2] = mul0x0d(a0) ^ mul0x09(a1) ^ mul0x0e(a2) ^ mul0x0b(a3);
+        state[i + 3] = mul0x0b(a0) ^ mul0x0d(a1) ^ mul0x09(a2) ^ mul0x0e(a3);
     }
+
+    // Reassemble the bytes into four u32 words, in big-endian order.
+    let w0 = u32::from_be_bytes(state[0..4].try_into().unwrap());
+    let w1 = u32::from_be_bytes(state[4..8].try_into().unwrap());
+    let w2 = u32::from_be_bytes(state[8..12].try_into().unwrap());
+    let w3 = u32::from_be_bytes(state[12..16].try_into().unwrap());
+
+    Block { w0, w1, w2, w3 }
 }
 
 /// ====================
