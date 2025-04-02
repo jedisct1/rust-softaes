@@ -1,6 +1,6 @@
 //! Software implementation of the AES round function.
 
-#![no_std]
+//#![no_std]
 
 use core::{
     cmp,
