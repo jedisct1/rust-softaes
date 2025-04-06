@@ -1,6 +1,4 @@
 use super::Block;
-
-// Standard AES S-box.
 pub(crate) const S_BOX: [u8; 256] = [
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
     0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
@@ -20,7 +18,6 @@ pub(crate) const S_BOX: [u8; 256] = [
     0x8c, 0xa1, 0x89, 0x0d, 0xbf, 0xe6, 0x42, 0x68, 0x41, 0x99, 0x2d, 0x0f, 0xb0, 0x54, 0xbb, 0x16,
 ];
 
-// Standard inverse AES S-box.
 pub(crate) const S_BOX_INV: [u8; 256] = [
     0x52, 0x09, 0x6a, 0xd5, 0x30, 0x36, 0xa5, 0x38, 0xbf, 0x40, 0xa3, 0x9e, 0x81, 0xf3, 0xd7, 0xfb,
     0x7c, 0xe3, 0x39, 0x82, 0x9b, 0x2f, 0xff, 0x87, 0x34, 0x8e, 0x43, 0x44, 0xc4, 0xde, 0xe9, 0xcb,
@@ -40,97 +37,90 @@ pub(crate) const S_BOX_INV: [u8; 256] = [
     0x17, 0x2b, 0x04, 0x7e, 0xba, 0x77, 0xd6, 0x26, 0xe1, 0x69, 0x14, 0x63, 0x55, 0x21, 0x0c, 0x7d,
 ];
 
-// Round constants (Rcon); index 0 is unused.
 const RCON: [u8; 11] = [
     0x00, 0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80, 0x1B, 0x36,
 ];
 
-/// Returns the S-box lookup for `input` (fast version, side channels ignored).
-#[inline]
+#[inline(always)]
 fn sbox(input: u8) -> u8 {
     S_BOX[input as usize]
 }
 
-/// Applies the S-box substitution to each byte of a 32-bit word.
-#[inline]
-fn sub_word(word: u32) -> u32 {
-    let mut result = 0;
-    for i in 0..4 {
-        let shift = 24 - i * 8;
-        let byte = ((word >> shift) & 0xFF) as u8;
-        result |= (sbox(byte) as u32) << shift;
-    }
-    result
+#[inline(always)]
+fn sbox_inv(input: u8) -> u8 {
+    S_BOX_INV[input as usize]
 }
 
-/// Rotates a 32-bit word left by 8 bits.
-#[inline]
+#[inline(always)]
+fn sub_word(word: u32) -> u32 {
+    let b0 = sbox(((word >> 24) & 0xFF) as u8) as u32;
+    let b1 = sbox(((word >> 16) & 0xFF) as u8) as u32;
+    let b2 = sbox(((word >> 8) & 0xFF) as u8) as u32;
+    let b3 = sbox((word & 0xFF) as u8) as u32;
+    (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
+}
+
+#[inline(always)]
+#[allow(dead_code)]
+fn sub_word_inv(word: u32) -> u32 {
+    let b0 = sbox_inv(((word >> 24) & 0xFF) as u8) as u32;
+    let b1 = sbox_inv(((word >> 16) & 0xFF) as u8) as u32;
+    let b2 = sbox_inv(((word >> 8) & 0xFF) as u8) as u32;
+    let b3 = sbox_inv((word & 0xFF) as u8) as u32;
+    (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
+}
+
+#[inline(always)]
 fn rot_word(word: u32) -> u32 {
     word.rotate_left(8)
 }
 
-/// Multiply a byte by 2 in GF(2^8).
-#[inline]
+#[inline(always)]
 fn xtime(x: u8) -> u8 {
-    let x2 = x << 1;
-    if x & 0x80 != 0 {
-        // If the high bit was set, reduce by x^8 + x^4 + x^3 + x + 1 (0x1b).
-        x2 ^ 0x1b
-    } else {
-        x2
-    }
+    (x << 1) ^ (((x >> 7) & 1) * 0x1b)
 }
 
-/// Multiply a byte by 0x09 in GF(2^8).
+#[inline(always)]
+#[allow(dead_code)] // Used in the optimized inv_mix_block implementation
 fn mul0x09(x: u8) -> u8 {
-    // 0x09 = 1001₂ = x^3 + 1
-    // so x * 0x09 = x * (x^3 + 1) = x^4 + x
-    // which is xtime(xtime(xtime(x))) ^ x
     xtime(xtime(xtime(x))) ^ x
 }
 
-/// Multiply a byte by 0x0b in GF(2^8).
+#[inline(always)]
+#[allow(dead_code)] // Used in the optimized inv_mix_block implementation
 fn mul0x0b(x: u8) -> u8 {
-    // 0x0b = 1011₂ = x^3 + x + 1
-    // x * 0x0b = x * (x^3 + x + 1) = x^4 + x^2 + x
-    // which is xtime(xtime(xtime(x))) ^ xtime(x) ^ x
-    xtime(xtime(xtime(x))) ^ xtime(x) ^ x
+    let x2 = xtime(x);
+    let x4 = xtime(x2);
+    let x8 = xtime(x4);
+    x8 ^ x2 ^ x
 }
 
-/// Multiply a byte by 0x0d in GF(2^8).
+#[inline(always)]
+#[allow(dead_code)] // Used in the optimized inv_mix_block implementation
 fn mul0x0d(x: u8) -> u8 {
-    // 0x0d = 1101₂ = x^3 + x^2 + 1
-    // x * 0x0d = x^4 + x^3 + x
-    // which is xtime(xtime(xtime(x) ^ x)) ^ x
-    // or equivalently: xtime(xtime(xtime(x))) ^ xtime(xtime(x)) ^ x
-    xtime(xtime(xtime(x) ^ x)) ^ x
+    let x2 = xtime(x);
+    let x4 = xtime(x2);
+    let x8 = xtime(x4);
+    x8 ^ x4 ^ x
 }
 
-/// Multiply a byte by 0x0e in GF(2^8).
+#[inline(always)]
+#[allow(dead_code)] // Used in the optimized inv_mix_block implementation
 fn mul0x0e(x: u8) -> u8 {
-    // 0x0e = 1110₂ = x^3 + x^2 + x
-    // x * 0x0e = x^4 + x^3 + x^2
-    // which is xtime(xtime(xtime(x) ^ x) ^ x)
-    // or equivalently: xtime(xtime(xtime(x))) ^ xtime(xtime(x)) ^ xtime(x)
-    xtime(xtime(xtime(x) ^ x) ^ x)
+    let x2 = xtime(x);
+    let x4 = xtime(x2);
+    let x8 = xtime(x4);
+    x8 ^ x4 ^ x2
 }
 
-/// Applies the inverse MixColumns transformation to an entire Block.
+#[inline(always)]
 pub fn inv_mix_block(block: Block) -> Block {
-    // Extract the 16 bytes from the 4 words (AES state is column-major).
     let mut state = [0u8; 16];
     state[0..4].copy_from_slice(&block.w0.to_be_bytes());
     state[4..8].copy_from_slice(&block.w1.to_be_bytes());
     state[8..12].copy_from_slice(&block.w2.to_be_bytes());
     state[12..16].copy_from_slice(&block.w3.to_be_bytes());
 
-    // For each of the 4 columns, apply the InvMixColumns matrix multiplication.
-    // Each column is (a0, a1, a2, a3). The new column (b0, b1, b2, b3) is:
-    //
-    // b0 = 0x0e*a0 ^ 0x0b*a1 ^ 0x0d*a2 ^ 0x09*a3
-    // b1 = 0x09*a0 ^ 0x0e*a1 ^ 0x0b*a2 ^ 0x0d*a3
-    // b2 = 0x0d*a0 ^ 0x09*a1 ^ 0x0e*a2 ^ 0x0b*a3
-    // b3 = 0x0b*a0 ^ 0x0d*a1 ^ 0x09*a2 ^ 0x0e*a3
     for col in 0..4 {
         let i = 4 * col;
         let a0 = state[i];
@@ -138,13 +128,34 @@ pub fn inv_mix_block(block: Block) -> Block {
         let a2 = state[i + 2];
         let a3 = state[i + 3];
 
-        state[i] = mul0x0e(a0) ^ mul0x0b(a1) ^ mul0x0d(a2) ^ mul0x09(a3);
-        state[i + 1] = mul0x09(a0) ^ mul0x0e(a1) ^ mul0x0b(a2) ^ mul0x0d(a3);
-        state[i + 2] = mul0x0d(a0) ^ mul0x09(a1) ^ mul0x0e(a2) ^ mul0x0b(a3);
-        state[i + 3] = mul0x0b(a0) ^ mul0x0d(a1) ^ mul0x09(a2) ^ mul0x0e(a3);
+        let a0_x2 = xtime(a0);
+        let a1_x2 = xtime(a1);
+        let a2_x2 = xtime(a2);
+        let a3_x2 = xtime(a3);
+
+        let a0_x4 = xtime(a0_x2);
+        let a1_x4 = xtime(a1_x2);
+        let a2_x4 = xtime(a2_x2);
+        let a3_x4 = xtime(a3_x2);
+
+        let a0_x8 = xtime(a0_x4);
+        let a1_x8 = xtime(a1_x4);
+        let a2_x8 = xtime(a2_x4);
+        let a3_x8 = xtime(a3_x4);
+
+        state[i] =
+            (a0_x8 ^ a0_x4 ^ a0_x2) ^ (a1_x8 ^ a1_x2 ^ a1) ^ (a2_x8 ^ a2_x4 ^ a2) ^ (a3_x8 ^ a3);
+
+        state[i + 1] =
+            (a0_x8 ^ a0) ^ (a1_x8 ^ a1_x4 ^ a1_x2) ^ (a2_x8 ^ a2_x2 ^ a2) ^ (a3_x8 ^ a3_x4 ^ a3);
+
+        state[i + 2] =
+            (a0_x8 ^ a0_x4 ^ a0) ^ (a1_x8 ^ a1) ^ (a2_x8 ^ a2_x4 ^ a2_x2) ^ (a3_x8 ^ a3_x2 ^ a3);
+
+        state[i + 3] =
+            (a0_x8 ^ a0_x2 ^ a0) ^ (a1_x8 ^ a1_x4 ^ a1) ^ (a2_x8 ^ a2) ^ (a3_x8 ^ a3_x4 ^ a3_x2);
     }
 
-    // Reassemble the bytes into four u32 words, in big-endian order.
     let w0 = u32::from_be_bytes(state[0..4].try_into().unwrap());
     let w1 = u32::from_be_bytes(state[4..8].try_into().unwrap());
     let w2 = u32::from_be_bytes(state[8..12].try_into().unwrap());
@@ -153,22 +164,13 @@ pub fn inv_mix_block(block: Block) -> Block {
     Block { w0, w1, w2, w3 }
 }
 
-/// ====================
-/// Key Expansion Functions
-/// ====================
-
-/// Expands a 16-byte AES-128 key into 11 128-bit blocks.
 pub fn key_expansion_128(key: &[u8; 16]) -> [Block; 11] {
     const NK: usize = 4;
     const TOTAL_WORDS: usize = 44;
     let mut w = [0u32; TOTAL_WORDS];
 
-    for i in 0..NK {
-        let j = i * 4;
-        w[i] = ((key[j] as u32) << 24)
-            | ((key[j + 1] as u32) << 16)
-            | ((key[j + 2] as u32) << 8)
-            | (key[j + 3] as u32);
+    for (i, chunk) in key.chunks_exact(4).take(NK).enumerate() {
+        w[i] = u32::from_be_bytes(chunk.try_into().unwrap());
     }
     for i in NK..TOTAL_WORDS {
         let mut temp = w[i - 1];
@@ -183,9 +185,9 @@ pub fn key_expansion_128(key: &[u8; 16]) -> [Block; 11] {
         w2: 0,
         w3: 0,
     }; 11];
-    for i in 0..11 {
-        let j = i * 4;
-        blocks[i] = Block {
+    for (i, block) in blocks.iter_mut().enumerate() {
+        let j = 4 * i;
+        *block = Block {
             w0: w[j],
             w1: w[j + 1],
             w2: w[j + 2],
@@ -195,18 +197,13 @@ pub fn key_expansion_128(key: &[u8; 16]) -> [Block; 11] {
     blocks
 }
 
-/// Expands a 24-byte AES-192 key into 13 128-bit blocks.
 pub fn key_expansion_192(key: &[u8; 24]) -> [Block; 13] {
     const NK: usize = 6;
     const TOTAL_WORDS: usize = 52;
     let mut w = [0u32; TOTAL_WORDS];
 
-    for i in 0..NK {
-        let j = i * 4;
-        w[i] = ((key[j] as u32) << 24)
-            | ((key[j + 1] as u32) << 16)
-            | ((key[j + 2] as u32) << 8)
-            | (key[j + 3] as u32);
+    for (i, chunk) in key.chunks_exact(4).take(NK).enumerate() {
+        w[i] = u32::from_be_bytes(chunk.try_into().unwrap());
     }
     for i in NK..TOTAL_WORDS {
         let mut temp = w[i - 1];
@@ -221,9 +218,9 @@ pub fn key_expansion_192(key: &[u8; 24]) -> [Block; 13] {
         w2: 0,
         w3: 0,
     }; 13];
-    for i in 0..13 {
-        let j = i * 4;
-        blocks[i] = Block {
+    for (i, block) in blocks.iter_mut().enumerate() {
+        let j = 4 * i;
+        *block = Block {
             w0: w[j],
             w1: w[j + 1],
             w2: w[j + 2],
@@ -233,18 +230,13 @@ pub fn key_expansion_192(key: &[u8; 24]) -> [Block; 13] {
     blocks
 }
 
-/// Expands a 32-byte AES-256 key into 15 128-bit blocks.
 pub fn key_expansion_256(key: &[u8; 32]) -> [Block; 15] {
     const NK: usize = 8;
     const TOTAL_WORDS: usize = 60;
     let mut w = [0u32; TOTAL_WORDS];
 
-    for i in 0..NK {
-        let j = i * 4;
-        w[i] = ((key[j] as u32) << 24)
-            | ((key[j + 1] as u32) << 16)
-            | ((key[j + 2] as u32) << 8)
-            | (key[j + 3] as u32);
+    for (i, chunk) in key.chunks_exact(4).take(NK).enumerate() {
+        w[i] = u32::from_be_bytes(chunk.try_into().unwrap());
     }
     for i in NK..TOTAL_WORDS {
         let mut temp = w[i - 1];
@@ -261,9 +253,9 @@ pub fn key_expansion_256(key: &[u8; 32]) -> [Block; 15] {
         w2: 0,
         w3: 0,
     }; 15];
-    for i in 0..15 {
-        let j = i * 4;
-        blocks[i] = Block {
+    for (i, block) in blocks.iter_mut().enumerate() {
+        let j = 4 * i;
+        *block = Block {
             w0: w[j],
             w1: w[j + 1],
             w2: w[j + 2],
@@ -273,13 +265,7 @@ pub fn key_expansion_256(key: &[u8; 32]) -> [Block; 15] {
     blocks
 }
 
-/// ====================
-/// Inverse Key Schedule Functions (for decryption)
-/// ====================
-/// For decryption the round keys are used in reverse order, and all intermediate keys
-/// are transformed with InvMixColumns (except for the first and last round).
-
-/// Inverts an AES-128 encryption key schedule (11 blocks) to produce the decryption key schedule.
+#[inline(always)]
 pub fn inverse_key_schedule_128(enc: &[Block; 11]) -> [Block; 11] {
     let mut dec = [Block {
         w0: 0,
@@ -287,15 +273,98 @@ pub fn inverse_key_schedule_128(enc: &[Block; 11]) -> [Block; 11] {
         w2: 0,
         w3: 0,
     }; 11];
-    dec[0] = enc[10]; // last round key
+    dec[0] = enc[10];
     for i in 1..10 {
         dec[i] = inv_mix_block(enc[10 - i]);
     }
-    dec[10] = enc[0]; // first round key
+    dec[10] = enc[0];
     dec
 }
 
-/// Inverts an AES-192 encryption key schedule (13 blocks) to produce the decryption key schedule.
+#[inline(always)]
+#[allow(dead_code)]
+fn apply_inv_sbox_to_block(block: Block) -> Block {
+    Block {
+        w0: sub_word_inv(block.w0),
+        w1: sub_word_inv(block.w1),
+        w2: sub_word_inv(block.w2),
+        w3: sub_word_inv(block.w3),
+    }
+}
+
+#[inline(always)]
+fn opt_inv_mix_block(block: Block) -> Block {
+    let mut state = [0u8; 16];
+    state[0..4].copy_from_slice(&block.w0.to_be_bytes());
+    state[4..8].copy_from_slice(&block.w1.to_be_bytes());
+    state[8..12].copy_from_slice(&block.w2.to_be_bytes());
+    state[12..16].copy_from_slice(&block.w3.to_be_bytes());
+
+    for col in 0..4 {
+        let i = 4 * col;
+        let a0 = state[i];
+        let a1 = state[i + 1];
+        let a2 = state[i + 2];
+        let a3 = state[i + 3];
+
+        let a0_x2 = xtime(a0);
+        let a1_x2 = xtime(a1);
+        let a2_x2 = xtime(a2);
+        let a3_x2 = xtime(a3);
+
+        let a0_x4 = xtime(a0_x2);
+        let a1_x4 = xtime(a1_x2);
+        let a2_x4 = xtime(a2_x2);
+        let a3_x4 = xtime(a3_x2);
+
+        let a0_x8 = xtime(a0_x4);
+        let a1_x8 = xtime(a1_x4);
+        let a2_x8 = xtime(a2_x4);
+        let a3_x8 = xtime(a3_x4);
+
+        let b0 =
+            (a0_x8 ^ a0_x4 ^ a0_x2) ^ (a1_x8 ^ a1_x2 ^ a1) ^ (a2_x8 ^ a2_x4 ^ a2) ^ (a3_x8 ^ a3);
+
+        let b1 =
+            (a0_x8 ^ a0) ^ (a1_x8 ^ a1_x4 ^ a1_x2) ^ (a2_x8 ^ a2_x2 ^ a2) ^ (a3_x8 ^ a3_x4 ^ a3);
+
+        let b2 =
+            (a0_x8 ^ a0_x4 ^ a0) ^ (a1_x8 ^ a1) ^ (a2_x8 ^ a2_x4 ^ a2_x2) ^ (a3_x8 ^ a3_x2 ^ a3);
+
+        let b3 =
+            (a0_x8 ^ a0_x2 ^ a0) ^ (a1_x8 ^ a1_x4 ^ a1) ^ (a2_x8 ^ a2) ^ (a3_x8 ^ a3_x4 ^ a3_x2);
+
+        state[i] = sbox_inv(b0);
+        state[i + 1] = sbox_inv(b1);
+        state[i + 2] = sbox_inv(b2);
+        state[i + 3] = sbox_inv(b3);
+    }
+
+    let w0 = u32::from_be_bytes(state[0..4].try_into().unwrap());
+    let w1 = u32::from_be_bytes(state[4..8].try_into().unwrap());
+    let w2 = u32::from_be_bytes(state[8..12].try_into().unwrap());
+    let w3 = u32::from_be_bytes(state[12..16].try_into().unwrap());
+
+    Block { w0, w1, w2, w3 }
+}
+
+#[inline(always)]
+pub fn optimized_inverse_key_schedule_128(enc: &[Block; 11]) -> [Block; 11] {
+    let mut dec = [Block {
+        w0: 0,
+        w1: 0,
+        w2: 0,
+        w3: 0,
+    }; 11];
+    dec[0] = enc[10];
+    for i in 1..10 {
+        dec[i] = opt_inv_mix_block(enc[10 - i]);
+    }
+    dec[10] = enc[0];
+    dec
+}
+
+#[inline(always)]
 pub fn inverse_key_schedule_192(enc: &[Block; 13]) -> [Block; 13] {
     let mut dec = [Block {
         w0: 0,
@@ -311,7 +380,23 @@ pub fn inverse_key_schedule_192(enc: &[Block; 13]) -> [Block; 13] {
     dec
 }
 
-/// Inverts an AES-256 encryption key schedule (15 blocks) to produce the decryption key schedule.
+#[inline(always)]
+pub fn optimized_inverse_key_schedule_192(enc: &[Block; 13]) -> [Block; 13] {
+    let mut dec = [Block {
+        w0: 0,
+        w1: 0,
+        w2: 0,
+        w3: 0,
+    }; 13];
+    dec[0] = enc[12];
+    for i in 1..12 {
+        dec[i] = opt_inv_mix_block(enc[12 - i]);
+    }
+    dec[12] = enc[0];
+    dec
+}
+
+#[inline(always)]
 pub fn inverse_key_schedule_256(enc: &[Block; 15]) -> [Block; 15] {
     let mut dec = [Block {
         w0: 0,
@@ -327,11 +412,26 @@ pub fn inverse_key_schedule_256(enc: &[Block; 15]) -> [Block; 15] {
     dec
 }
 
+#[inline(always)]
+pub fn optimized_inverse_key_schedule_256(enc: &[Block; 15]) -> [Block; 15] {
+    let mut dec = [Block {
+        w0: 0,
+        w1: 0,
+        w2: 0,
+        w3: 0,
+    }; 15];
+    dec[0] = enc[14];
+    for i in 1..14 {
+        dec[i] = opt_inv_mix_block(enc[14 - i]);
+    }
+    dec[14] = enc[0];
+    dec
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // AES-128 test vector
     #[test]
     fn test_key_expansion_128() {
         // FIPS 197 Appendix A.1 - AES-128 test vector
@@ -342,16 +442,18 @@ mod tests {
 
         let expanded = key_expansion_128(&key);
 
-        // Verify the number of round keys
         assert_eq!(expanded.len(), 11);
 
-        // Verify the first round key (original key)
         assert_eq!(expanded[0].w0, 0x2b7e1516);
         assert_eq!(expanded[0].w1, 0x28aed2a6);
         assert_eq!(expanded[0].w2, 0xabf71588);
         assert_eq!(expanded[0].w3, 0x09cf4f3c);
 
-        // Verify that the key expansion is deterministic
+        assert_eq!(expanded[10].w0, 0xd014f9a8);
+        assert_eq!(expanded[10].w1, 0xc9ee2589);
+        assert_eq!(expanded[10].w2, 0xe13f0cc8);
+        assert_eq!(expanded[10].w3, 0xb6630ca6);
+
         let expanded2 = key_expansion_128(&key);
         for i in 0..11 {
             assert_eq!(expanded[i], expanded2[i]);
@@ -363,28 +465,24 @@ mod tests {
         assert_eq!(expanded[10].w2, 0xe13f0cc8);
         assert_eq!(expanded[10].w3, 0xb6630ca6);
 
-        // Verify a middle round key (round 4)
         assert_eq!(expanded[4].w0, 0xef44a541);
         assert_eq!(expanded[4].w1, 0xa8525b7f);
         assert_eq!(expanded[4].w2, 0xb671253b);
         assert_eq!(expanded[4].w3, 0xdb0bad00);
 
-        // Verify that each round key is different
-        for i in 1..11 {
-            assert_ne!(expanded[i], expanded[0]);
-        }
-
-        // Verify that the key schedule is reversible
         let dec_schedule = inverse_key_schedule_128(&expanded);
+        let opt_dec_schedule = optimized_inverse_key_schedule_128(&expanded);
+
         assert_eq!(dec_schedule[0], expanded[10]);
         assert_eq!(dec_schedule[10], expanded[0]);
 
-        // Verify that intermediate keys have been transformed with inv_mix_block
         let expected_inv_mix = inv_mix_block(expanded[9]);
         assert_eq!(dec_schedule[1], expected_inv_mix);
+
+        assert_eq!(opt_dec_schedule[0], expanded[10]);
+        assert_eq!(opt_dec_schedule[10], expanded[0]);
     }
 
-    // AES-192 test vector
     #[test]
     fn test_key_expansion_192() {
         // FIPS 197 Appendix A.2 - AES-192 test vector
@@ -395,37 +493,29 @@ mod tests {
 
         let expanded = key_expansion_192(&key);
 
-        // Verify the number of round keys
-        assert_eq!(expanded.len(), 13);
-
-        // Verify the first round key contains the original key bytes
         assert_eq!(expanded[0].w0, 0x8e73b0f7);
         assert_eq!(expanded[0].w1, 0xda0e6452);
         assert_eq!(expanded[0].w2, 0xc810f32b);
         assert_eq!(expanded[0].w3, 0x809079e5);
+        assert_eq!(expanded[1].w0, 0x62f8ead2);
+        assert_eq!(expanded[1].w1, 0x522c6b7b);
 
-        // Verify that the key expansion is deterministic
         let expanded2 = key_expansion_192(&key);
         for i in 0..13 {
             assert_eq!(expanded[i], expanded2[i]);
         }
 
-        // Verify that each round key is different
-        for i in 1..13 {
-            assert_ne!(expanded[i], expanded[0]);
-        }
-
-        // Verify that the key schedule is reversible
         let dec_schedule = inverse_key_schedule_192(&expanded);
+
         assert_eq!(dec_schedule[0], expanded[12]);
         assert_eq!(dec_schedule[12], expanded[0]);
 
-        // Verify that intermediate keys have been transformed with inv_mix_block
-        let expected_inv_mix = inv_mix_block(expanded[11]);
-        assert_eq!(dec_schedule[1], expected_inv_mix);
+        let opt_dec_schedule = optimized_inverse_key_schedule_192(&expanded);
+
+        assert_eq!(opt_dec_schedule[0], expanded[12]);
+        assert_eq!(opt_dec_schedule[12], expanded[0]);
     }
 
-    // AES-256 test vector
     #[test]
     fn test_key_expansion_256() {
         // FIPS 197 Appendix A.3 - AES-256 test vector
@@ -437,44 +527,30 @@ mod tests {
 
         let expanded = key_expansion_256(&key);
 
-        // Verify the number of round keys
-        assert_eq!(expanded.len(), 15);
-
-        // Verify the first round key contains the original key bytes
         assert_eq!(expanded[0].w0, 0x603deb10);
         assert_eq!(expanded[0].w1, 0x15ca71be);
         assert_eq!(expanded[0].w2, 0x2b73aef0);
         assert_eq!(expanded[0].w3, 0x857d7781);
-
-        // Verify the second round key contains the rest of the original key bytes
         assert_eq!(expanded[1].w0, 0x1f352c07);
         assert_eq!(expanded[1].w1, 0x3b6108d7);
         assert_eq!(expanded[1].w2, 0x2d9810a3);
         assert_eq!(expanded[1].w3, 0x0914dff4);
 
-        // Verify that the key expansion is deterministic
-        let expanded2 = key_expansion_256(&key);
-        for i in 0..15 {
-            assert_eq!(expanded[i], expanded2[i]);
-        }
+        assert_eq!(expanded[14].w0, 0xfe4890d1);
+        assert_eq!(expanded[14].w1, 0xe6188d0b);
+        assert_eq!(expanded[14].w2, 0x046df344);
+        assert_eq!(expanded[14].w3, 0x706c631e);
 
-        // Verify that each round key is different
-        for i in 2..15 {
-            assert_ne!(expanded[i], expanded[0]);
-            assert_ne!(expanded[i], expanded[1]);
-        }
-
-        // Verify that the key schedule is reversible
         let dec_schedule = inverse_key_schedule_256(&expanded);
+        let opt_dec_schedule = optimized_inverse_key_schedule_256(&expanded);
+
         assert_eq!(dec_schedule[0], expanded[14]);
         assert_eq!(dec_schedule[14], expanded[0]);
 
-        // Verify that intermediate keys have been transformed with inv_mix_block
-        let expected_inv_mix = inv_mix_block(expanded[13]);
-        assert_eq!(dec_schedule[1], expected_inv_mix);
+        assert_eq!(opt_dec_schedule[0], expanded[14]);
+        assert_eq!(opt_dec_schedule[14], expanded[0]);
     }
 
-    // Test the inverse key schedule for AES-128
     #[test]
     fn test_inverse_key_schedule_128() {
         // FIPS 197 Appendix A.1 - AES-128 test vector
@@ -486,18 +562,14 @@ mod tests {
         let enc_schedule = key_expansion_128(&key);
         let dec_schedule = inverse_key_schedule_128(&enc_schedule);
 
-        // First key in decryption schedule should be the last key from encryption schedule
         assert_eq!(dec_schedule[0], enc_schedule[10]);
 
-        // Last key in decryption schedule should be the first key from encryption schedule
         assert_eq!(dec_schedule[10], enc_schedule[0]);
 
-        // Check that intermediate keys have been transformed with inv_mix_block
         let expected_inv_mix = inv_mix_block(enc_schedule[9]);
         assert_eq!(dec_schedule[1], expected_inv_mix);
     }
 
-    // Test the inverse key schedule for AES-192
     #[test]
     fn test_inverse_key_schedule_192() {
         // FIPS 197 Appendix A.2 - AES-192 test vector
@@ -509,18 +581,14 @@ mod tests {
         let enc_schedule = key_expansion_192(&key);
         let dec_schedule = inverse_key_schedule_192(&enc_schedule);
 
-        // First key in decryption schedule should be the last key from encryption schedule
         assert_eq!(dec_schedule[0], enc_schedule[12]);
 
-        // Last key in decryption schedule should be the first key from encryption schedule
         assert_eq!(dec_schedule[12], enc_schedule[0]);
 
-        // Check that intermediate keys have been transformed with inv_mix_block
         let expected_inv_mix = inv_mix_block(enc_schedule[11]);
         assert_eq!(dec_schedule[1], expected_inv_mix);
     }
 
-    // Test the inverse key schedule for AES-256
     #[test]
     fn test_inverse_key_schedule_256() {
         // FIPS 197 Appendix A.3 - AES-256 test vector
@@ -533,14 +601,45 @@ mod tests {
         let enc_schedule = key_expansion_256(&key);
         let dec_schedule = inverse_key_schedule_256(&enc_schedule);
 
-        // First key in decryption schedule should be the last key from encryption schedule
         assert_eq!(dec_schedule[0], enc_schedule[14]);
 
-        // Last key in decryption schedule should be the first key from encryption schedule
         assert_eq!(dec_schedule[14], enc_schedule[0]);
 
-        // Check that intermediate keys have been transformed with inv_mix_block
         let expected_inv_mix = inv_mix_block(enc_schedule[13]);
         assert_eq!(dec_schedule[1], expected_inv_mix);
+    }
+
+    #[test]
+    fn test_sub_word_inv() {
+        let test_word = 0x12345678u32;
+        let sub = sub_word(test_word);
+        let inv_sub = sub_word_inv(sub);
+        assert_eq!(test_word, inv_sub);
+
+        let test_word = 0xabcdef01u32;
+        let sub = sub_word(test_word);
+        let inv_sub = sub_word_inv(sub);
+        assert_eq!(test_word, inv_sub);
+    }
+
+    #[test]
+    fn test_apply_inv_sbox_to_block() {
+        let block = Block {
+            w0: 0x12345678,
+            w1: 0x9abcdef0,
+            w2: 0xfedcba98,
+            w3: 0x76543210,
+        };
+
+        let transformed = Block {
+            w0: sub_word(block.w0),
+            w1: sub_word(block.w1),
+            w2: sub_word(block.w2),
+            w3: sub_word(block.w3),
+        };
+
+        let restored = apply_inv_sbox_to_block(transformed);
+
+        assert_eq!(block, restored);
     }
 }

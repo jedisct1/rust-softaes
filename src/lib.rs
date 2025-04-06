@@ -272,7 +272,7 @@ pub type SoftAesSlow = SoftAes<16, { 256 / 16 }>;
 pub type SoftAesModerate = SoftAes<64, { 256 / 64 }>;
 
 /// Fast software AES implementation, but with minimal protection against side channels
-pub type SoftAesFast = SoftAes<256, { 256 / 256 }>;
+pub type SoftAesFast = SoftAes<256, 1>;
 
 /// Fastest software AES implementation, but with no protection against side channels
 pub mod unprotected;

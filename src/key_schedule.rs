@@ -212,7 +212,6 @@ pub fn opt_inv_mix_block(block: Block) -> Block {
 /// ====================
 /// Key Expansion Functions
 /// ====================
-
 /// Expands a 16-byte AES-128 key into 11 128-bit blocks.
 pub fn key_expansion_128(key: &[u8; 16]) -> [Block; 11] {
     const NK: usize = 4;
@@ -352,7 +351,6 @@ pub fn key_expansion_256(key: &[u8; 32]) -> [Block; 15] {
 ///
 /// The optimized versions of these functions leverage the inverse S-box for potentially
 /// better performance in certain scenarios.
-
 /// Inverts an AES-128 encryption key schedule (11 blocks) to produce the decryption key schedule.
 pub fn inverse_key_schedule_128(enc: &[Block; 11]) -> [Block; 11] {
     let mut dec = [Block {
