@@ -361,3 +361,218 @@ pub fn inverse_key_schedule_256(enc: &[Block; 15]) -> [Block; 15] {
     dec[14] = enc[0];
     dec
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // AES-128 test vector
+    #[test]
+    fn test_key_expansion_128() {
+        // FIPS 197 Appendix A.1 - AES-128 test vector
+        let key = [
+            0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
+            0x4f, 0x3c,
+        ];
+
+        let expanded = key_expansion_128(&key);
+
+        // Verify the number of round keys
+        assert_eq!(expanded.len(), 11);
+
+        // Verify the first round key (original key)
+        assert_eq!(expanded[0].w0, 0x2b7e1516);
+        assert_eq!(expanded[0].w1, 0x28aed2a6);
+        assert_eq!(expanded[0].w2, 0xabf71588);
+        assert_eq!(expanded[0].w3, 0x09cf4f3c);
+
+        // Verify that the key expansion is deterministic
+        let expanded2 = key_expansion_128(&key);
+        for i in 0..11 {
+            assert_eq!(expanded[i], expanded2[i]);
+        }
+
+        // Verify the last round key
+        assert_eq!(expanded[10].w0, 0xd014f9a8);
+        assert_eq!(expanded[10].w1, 0xc9ee2589);
+        assert_eq!(expanded[10].w2, 0xe13f0cc8);
+        assert_eq!(expanded[10].w3, 0xb6630ca6);
+
+        // Verify a middle round key (round 4)
+        assert_eq!(expanded[4].w0, 0xef44a541);
+        assert_eq!(expanded[4].w1, 0xa8525b7f);
+        assert_eq!(expanded[4].w2, 0xb671253b);
+        assert_eq!(expanded[4].w3, 0xdb0bad00);
+
+        // Verify that each round key is different
+        for i in 1..11 {
+            assert_ne!(expanded[i], expanded[0]);
+        }
+
+        // Verify that the key schedule is reversible
+        let dec_schedule = inverse_key_schedule_128(&expanded);
+        assert_eq!(dec_schedule[0], expanded[10]);
+        assert_eq!(dec_schedule[10], expanded[0]);
+
+        // Verify that intermediate keys have been transformed with inv_mix_block
+        let expected_inv_mix = inv_mix_block(expanded[9]);
+        assert_eq!(dec_schedule[1], expected_inv_mix);
+    }
+
+    // AES-192 test vector
+    #[test]
+    fn test_key_expansion_192() {
+        // FIPS 197 Appendix A.2 - AES-192 test vector
+        let key = [
+            0x8e, 0x73, 0xb0, 0xf7, 0xda, 0x0e, 0x64, 0x52, 0xc8, 0x10, 0xf3, 0x2b, 0x80, 0x90,
+            0x79, 0xe5, 0x62, 0xf8, 0xea, 0xd2, 0x52, 0x2c, 0x6b, 0x7b,
+        ];
+
+        let expanded = key_expansion_192(&key);
+
+        // Verify the number of round keys
+        assert_eq!(expanded.len(), 13);
+
+        // Verify the first round key contains the original key bytes
+        assert_eq!(expanded[0].w0, 0x8e73b0f7);
+        assert_eq!(expanded[0].w1, 0xda0e6452);
+        assert_eq!(expanded[0].w2, 0xc810f32b);
+        assert_eq!(expanded[0].w3, 0x809079e5);
+
+        // Verify that the key expansion is deterministic
+        let expanded2 = key_expansion_192(&key);
+        for i in 0..13 {
+            assert_eq!(expanded[i], expanded2[i]);
+        }
+
+        // Verify that each round key is different
+        for i in 1..13 {
+            assert_ne!(expanded[i], expanded[0]);
+        }
+
+        // Verify that the key schedule is reversible
+        let dec_schedule = inverse_key_schedule_192(&expanded);
+        assert_eq!(dec_schedule[0], expanded[12]);
+        assert_eq!(dec_schedule[12], expanded[0]);
+
+        // Verify that intermediate keys have been transformed with inv_mix_block
+        let expected_inv_mix = inv_mix_block(expanded[11]);
+        assert_eq!(dec_schedule[1], expected_inv_mix);
+    }
+
+    // AES-256 test vector
+    #[test]
+    fn test_key_expansion_256() {
+        // FIPS 197 Appendix A.3 - AES-256 test vector
+        let key = [
+            0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d,
+            0x77, 0x81, 0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3,
+            0x09, 0x14, 0xdf, 0xf4,
+        ];
+
+        let expanded = key_expansion_256(&key);
+
+        // Verify the number of round keys
+        assert_eq!(expanded.len(), 15);
+
+        // Verify the first round key contains the original key bytes
+        assert_eq!(expanded[0].w0, 0x603deb10);
+        assert_eq!(expanded[0].w1, 0x15ca71be);
+        assert_eq!(expanded[0].w2, 0x2b73aef0);
+        assert_eq!(expanded[0].w3, 0x857d7781);
+
+        // Verify the second round key contains the rest of the original key bytes
+        assert_eq!(expanded[1].w0, 0x1f352c07);
+        assert_eq!(expanded[1].w1, 0x3b6108d7);
+        assert_eq!(expanded[1].w2, 0x2d9810a3);
+        assert_eq!(expanded[1].w3, 0x0914dff4);
+
+        // Verify that the key expansion is deterministic
+        let expanded2 = key_expansion_256(&key);
+        for i in 0..15 {
+            assert_eq!(expanded[i], expanded2[i]);
+        }
+
+        // Verify that each round key is different
+        for i in 2..15 {
+            assert_ne!(expanded[i], expanded[0]);
+            assert_ne!(expanded[i], expanded[1]);
+        }
+
+        // Verify that the key schedule is reversible
+        let dec_schedule = inverse_key_schedule_256(&expanded);
+        assert_eq!(dec_schedule[0], expanded[14]);
+        assert_eq!(dec_schedule[14], expanded[0]);
+
+        // Verify that intermediate keys have been transformed with inv_mix_block
+        let expected_inv_mix = inv_mix_block(expanded[13]);
+        assert_eq!(dec_schedule[1], expected_inv_mix);
+    }
+
+    // Test the inverse key schedule for AES-128
+    #[test]
+    fn test_inverse_key_schedule_128() {
+        let key = [
+            0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
+            0x4f, 0x3c,
+        ];
+
+        let enc_schedule = key_expansion_128(&key);
+        let dec_schedule = inverse_key_schedule_128(&enc_schedule);
+
+        // First key in decryption schedule should be the last key from encryption schedule
+        assert_eq!(dec_schedule[0], enc_schedule[10]);
+
+        // Last key in decryption schedule should be the first key from encryption schedule
+        assert_eq!(dec_schedule[10], enc_schedule[0]);
+
+        // Check that intermediate keys have been transformed with inv_mix_block
+        let expected_inv_mix = inv_mix_block(enc_schedule[9]);
+        assert_eq!(dec_schedule[1], expected_inv_mix);
+    }
+
+    // Test the inverse key schedule for AES-192
+    #[test]
+    fn test_inverse_key_schedule_192() {
+        let key = [
+            0x8e, 0x73, 0xb0, 0xf7, 0xda, 0x0e, 0x64, 0x52, 0xc8, 0x10, 0xf3, 0x2b, 0x80, 0x90,
+            0x79, 0xe5, 0x62, 0xf8, 0xea, 0xd2, 0x52, 0x2c, 0x6b, 0x7b,
+        ];
+
+        let enc_schedule = key_expansion_192(&key);
+        let dec_schedule = inverse_key_schedule_192(&enc_schedule);
+
+        // First key in decryption schedule should be the last key from encryption schedule
+        assert_eq!(dec_schedule[0], enc_schedule[12]);
+
+        // Last key in decryption schedule should be the first key from encryption schedule
+        assert_eq!(dec_schedule[12], enc_schedule[0]);
+
+        // Check that intermediate keys have been transformed with inv_mix_block
+        let expected_inv_mix = inv_mix_block(enc_schedule[11]);
+        assert_eq!(dec_schedule[1], expected_inv_mix);
+    }
+
+    // Test the inverse key schedule for AES-256
+    #[test]
+    fn test_inverse_key_schedule_256() {
+        let key = [
+            0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d,
+            0x77, 0x81, 0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3,
+            0x09, 0x14, 0xdf, 0xf4,
+        ];
+
+        let enc_schedule = key_expansion_256(&key);
+        let dec_schedule = inverse_key_schedule_256(&enc_schedule);
+
+        // First key in decryption schedule should be the last key from encryption schedule
+        assert_eq!(dec_schedule[0], enc_schedule[14]);
+
+        // Last key in decryption schedule should be the first key from encryption schedule
+        assert_eq!(dec_schedule[14], enc_schedule[0]);
+
+        // Check that intermediate keys have been transformed with inv_mix_block
+        let expected_inv_mix = inv_mix_block(enc_schedule[13]);
+        assert_eq!(dec_schedule[1], expected_inv_mix);
+    }
+}
