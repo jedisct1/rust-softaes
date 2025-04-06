@@ -75,7 +75,7 @@ fn xtime(x: u8) -> u8 {
     let x2 = x << 1;
     if x & 0x80 != 0 {
         // If the high bit was set, reduce by x^8 + x^4 + x^3 + x + 1 (0x1b).
-        (x2 ^ 0x1b) & 0xff
+        x2 ^ 0x1b
     } else {
         x2
     }
@@ -133,12 +133,12 @@ pub fn inv_mix_block(block: Block) -> Block {
     // b3 = 0x0b*a0 ^ 0x0d*a1 ^ 0x09*a2 ^ 0x0e*a3
     for col in 0..4 {
         let i = 4 * col;
-        let a0 = state[i + 0];
+        let a0 = state[i];
         let a1 = state[i + 1];
         let a2 = state[i + 2];
         let a3 = state[i + 3];
 
-        state[i + 0] = mul0x0e(a0) ^ mul0x0b(a1) ^ mul0x0d(a2) ^ mul0x09(a3);
+        state[i] = mul0x0e(a0) ^ mul0x0b(a1) ^ mul0x0d(a2) ^ mul0x09(a3);
         state[i + 1] = mul0x09(a0) ^ mul0x0e(a1) ^ mul0x0b(a2) ^ mul0x0d(a3);
         state[i + 2] = mul0x0d(a0) ^ mul0x09(a1) ^ mul0x0e(a2) ^ mul0x0b(a3);
         state[i + 3] = mul0x0b(a0) ^ mul0x0d(a1) ^ mul0x09(a2) ^ mul0x0e(a3);

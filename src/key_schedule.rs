@@ -174,12 +174,12 @@ pub fn inv_mix_block(block: Block) -> Block {
     // b3 = 0x0b*a0 ^ 0x0d*a1 ^ 0x09*a2 ^ 0x0e*a3
     for col in 0..4 {
         let i = 4 * col;
-        let a0 = state[i + 0];
+        let a0 = state[i];
         let a1 = state[i + 1];
         let a2 = state[i + 2];
         let a3 = state[i + 3];
 
-        state[i + 0] = mul0x0e(a0) ^ mul0x0b(a1) ^ mul0x0d(a2) ^ mul0x09(a3);
+        state[i] = mul0x0e(a0) ^ mul0x0b(a1) ^ mul0x0d(a2) ^ mul0x09(a3);
         state[i + 1] = mul0x09(a0) ^ mul0x0e(a1) ^ mul0x0b(a2) ^ mul0x0d(a3);
         state[i + 2] = mul0x0d(a0) ^ mul0x09(a1) ^ mul0x0e(a2) ^ mul0x0b(a3);
         state[i + 3] = mul0x0b(a0) ^ mul0x0d(a1) ^ mul0x09(a2) ^ mul0x0e(a3);
@@ -194,29 +194,19 @@ pub fn inv_mix_block(block: Block) -> Block {
     Block { w0, w1, w2, w3 }
 }
 
-/// This function applies the inverse S-box to each byte in a block in constant time.
-/// It's useful for optimizing certain AES operations that involve the inverse S-box.
+#[inline(always)]
 pub fn apply_inv_sbox_to_block(block: Block) -> Block {
-    // Apply the inverse S-box to each word using sub_word_inv_ct
-    // This is more efficient than processing each byte individually
-    let w0_inv = sub_word_inv_ct(block.w0);
-    let w1_inv = sub_word_inv_ct(block.w1);
-    let w2_inv = sub_word_inv_ct(block.w2);
-    let w3_inv = sub_word_inv_ct(block.w3);
-    
-    Block { w0: w0_inv, w1: w1_inv, w2: w2_inv, w3: w3_inv }
+    Block {
+        w0: sub_word_inv_ct(block.w0),
+        w1: sub_word_inv_ct(block.w1),
+        w2: sub_word_inv_ct(block.w2),
+        w3: sub_word_inv_ct(block.w3),
+    }
 }
 
-/// Optimized version of inv_mix_block that leverages the inverse S-box in constant time.
-/// 
-/// This function applies the inverse MixColumns transformation to a block
-/// and then applies the inverse S-box to each byte using constant-time operations.
+#[inline(always)]
 pub fn opt_inv_mix_block(block: Block) -> Block {
-    // First apply the standard inverse mix block operation
-    let mixed_block = inv_mix_block(block);
-    
-    // Then apply the inverse S-box to each byte using constant-time lookups
-    apply_inv_sbox_to_block(mixed_block)
+    apply_inv_sbox_to_block(inv_mix_block(block))
 }
 
 /// ====================
@@ -359,7 +349,7 @@ pub fn key_expansion_256(key: &[u8; 32]) -> [Block; 15] {
 ///
 /// For decryption, the round keys are used in reverse order. Moreover, every round key
 /// except the first and last must be transformed by the inverse MixColumns operation.
-/// 
+///
 /// The optimized versions of these functions leverage the inverse S-box for potentially
 /// better performance in certain scenarios.
 
@@ -381,10 +371,6 @@ pub fn inverse_key_schedule_128(enc: &[Block; 11]) -> [Block; 11] {
     dec
 }
 
-/// Optimized version of inverse_key_schedule_128 that leverages the inverse S-box.
-/// 
-/// This function produces the same result as inverse_key_schedule_128 but may be more
-/// efficient in certain scenarios due to the use of the inverse S-box.
 pub fn optimized_inverse_key_schedule_128(enc: &[Block; 11]) -> [Block; 11] {
     let mut dec = [Block {
         w0: 0,
@@ -392,14 +378,13 @@ pub fn optimized_inverse_key_schedule_128(enc: &[Block; 11]) -> [Block; 11] {
         w2: 0,
         w3: 0,
     }; 11];
-    dec[0] = enc[10]; // Last round key (no InvMixColumns)
-    let mut i = 1;
-    while i < 10 {
-        // Apply the standard inverse mix block operation
+    dec[0] = enc[10];
+
+    for i in 1..10 {
         dec[i] = inv_mix_block(enc[10 - i]);
-        i += 1;
     }
-    dec[10] = enc[0]; // First round key (no InvMixColumns)
+
+    dec[10] = enc[0];
     dec
 }
 
@@ -421,10 +406,6 @@ pub fn inverse_key_schedule_192(enc: &[Block; 13]) -> [Block; 13] {
     dec
 }
 
-/// Optimized version of inverse_key_schedule_192 that leverages the inverse S-box.
-/// 
-/// This function produces the same result as inverse_key_schedule_192 but may be more
-/// efficient in certain scenarios due to the use of the inverse S-box.
 pub fn optimized_inverse_key_schedule_192(enc: &[Block; 13]) -> [Block; 13] {
     let mut dec = [Block {
         w0: 0,
@@ -432,14 +413,13 @@ pub fn optimized_inverse_key_schedule_192(enc: &[Block; 13]) -> [Block; 13] {
         w2: 0,
         w3: 0,
     }; 13];
-    dec[0] = enc[12]; // Last round key (no InvMixColumns)
-    let mut i = 1;
-    while i < 12 {
-        // Apply the standard inverse mix block operation
+    dec[0] = enc[12];
+
+    for i in 1..12 {
         dec[i] = inv_mix_block(enc[12 - i]);
-        i += 1;
     }
-    dec[12] = enc[0]; // First round key (no InvMixColumns)
+
+    dec[12] = enc[0];
     dec
 }
 
@@ -461,10 +441,6 @@ pub fn inverse_key_schedule_256(enc: &[Block; 15]) -> [Block; 15] {
     dec
 }
 
-/// Optimized version of inverse_key_schedule_256 that leverages the inverse S-box.
-/// 
-/// This function produces the same result as inverse_key_schedule_256 but may be more
-/// efficient in certain scenarios due to the use of the inverse S-box.
 pub fn optimized_inverse_key_schedule_256(enc: &[Block; 15]) -> [Block; 15] {
     let mut dec = [Block {
         w0: 0,
@@ -472,83 +448,82 @@ pub fn optimized_inverse_key_schedule_256(enc: &[Block; 15]) -> [Block; 15] {
         w2: 0,
         w3: 0,
     }; 15];
-    dec[0] = enc[14]; // Last round key (no InvMixColumns)
-    let mut i = 1;
-    while i < 14 {
-        // Apply the standard inverse mix block operation
+    dec[0] = enc[14];
+
+    for i in 1..14 {
         dec[i] = inv_mix_block(enc[14 - i]);
-        i += 1;
     }
-    dec[14] = enc[0]; // First round key (no InvMixColumns)
+
+    dec[14] = enc[0];
     dec
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
-    /// Test that the optimized inverse key schedule functions produce the same results
-    /// as the original functions.
+
     #[test]
     fn test_optimized_inverse_key_schedule() {
-        // Test AES-128
-        let key_128 = [0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c];
+        let key_128 = [
+            0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
+            0x4f, 0x3c,
+        ];
         let expanded_128 = key_expansion_128(&key_128);
-        
+
         let inv_128 = inverse_key_schedule_128(&expanded_128);
         let opt_inv_128 = optimized_inverse_key_schedule_128(&expanded_128);
-        
-        // Verify that both functions produce the same results
+
         for i in 0..11 {
-            assert_eq!(inv_128[i], opt_inv_128[i], "AES-128 round key {} mismatch", i);
+            assert_eq!(
+                inv_128[i], opt_inv_128[i],
+                "AES-128 round key {} mismatch",
+                i
+            );
         }
-        
-        // Test AES-192
+
         let key_192 = [
-            0x8e, 0x73, 0xb0, 0xf7, 0xda, 0x0e, 0x64, 0x52, 0xc8, 0x10, 0xf3, 0x2b,
-            0x80, 0x90, 0x79, 0xe5, 0x62, 0xf8, 0xea, 0xd2, 0x52, 0x2c, 0x6b, 0x7b,
+            0x8e, 0x73, 0xb0, 0xf7, 0xda, 0x0e, 0x64, 0x52, 0xc8, 0x10, 0xf3, 0x2b, 0x80, 0x90,
+            0x79, 0xe5, 0x62, 0xf8, 0xea, 0xd2, 0x52, 0x2c, 0x6b, 0x7b,
         ];
         let expanded_192 = key_expansion_192(&key_192);
-        
         let inv_192 = inverse_key_schedule_192(&expanded_192);
         let opt_inv_192 = optimized_inverse_key_schedule_192(&expanded_192);
-        
-        // Verify that both functions produce the same results
+
         for i in 0..13 {
-            assert_eq!(inv_192[i], opt_inv_192[i], "AES-192 round key {} mismatch", i);
+            assert_eq!(
+                inv_192[i], opt_inv_192[i],
+                "AES-192 round key {} mismatch",
+                i
+            );
         }
-        
-        // Test AES-256
+
         let key_256 = [
-            0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d, 0x77, 0x81,
-            0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3, 0x09, 0x14, 0xdf, 0xf4,
+            0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d,
+            0x77, 0x81, 0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3,
+            0x09, 0x14, 0xdf, 0xf4,
         ];
         let expanded_256 = key_expansion_256(&key_256);
-        
         let inv_256 = inverse_key_schedule_256(&expanded_256);
         let opt_inv_256 = optimized_inverse_key_schedule_256(&expanded_256);
-        
-        // Verify that both functions produce the same results
+
         for i in 0..15 {
-            assert_eq!(inv_256[i], opt_inv_256[i], "AES-256 round key {} mismatch", i);
+            assert_eq!(
+                inv_256[i], opt_inv_256[i],
+                "AES-256 round key {} mismatch",
+                i
+            );
         }
     }
 
-    // AES-128 test vector
     #[test]
     fn test_key_expansion_128() {
-        // FIPS 197 Appendix A.1 - AES-128 test vector
         let key = [
             0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
             0x4f, 0x3c,
         ];
 
         let expanded = key_expansion_128(&key);
-
-        // Verify the number of round keys
         assert_eq!(expanded.len(), 11);
-
-        // Verify the first round key (original key)
         assert_eq!(expanded[0].w0, 0x2b7e1516);
         assert_eq!(expanded[0].w1, 0x28aed2a6);
         assert_eq!(expanded[0].w2, 0xabf71588);
@@ -560,13 +535,11 @@ mod tests {
             assert_eq!(expanded[i], expanded2[i]);
         }
 
-        // Verify the last round key
         assert_eq!(expanded[10].w0, 0xd014f9a8);
         assert_eq!(expanded[10].w1, 0xc9ee2589);
         assert_eq!(expanded[10].w2, 0xe13f0cc8);
         assert_eq!(expanded[10].w3, 0xb6630ca6);
 
-        // Verify a middle round key (round 4)
         assert_eq!(expanded[4].w0, 0xef44a541);
         assert_eq!(expanded[4].w1, 0xa8525b7f);
         assert_eq!(expanded[4].w2, 0xb671253b);
@@ -587,10 +560,8 @@ mod tests {
         assert_eq!(dec_schedule[1], expected_inv_mix);
     }
 
-    // AES-192 test vector
     #[test]
     fn test_key_expansion_192() {
-        // FIPS 197 Appendix A.2 - AES-192 test vector
         let key = [
             0x8e, 0x73, 0xb0, 0xf7, 0xda, 0x0e, 0x64, 0x52, 0xc8, 0x10, 0xf3, 0x2b, 0x80, 0x90,
             0x79, 0xe5, 0x62, 0xf8, 0xea, 0xd2, 0x52, 0x2c, 0x6b, 0x7b,
@@ -598,40 +569,32 @@ mod tests {
 
         let expanded = key_expansion_192(&key);
 
-        // Verify the number of round keys
         assert_eq!(expanded.len(), 13);
 
-        // Verify the first round key contains the original key bytes
         assert_eq!(expanded[0].w0, 0x8e73b0f7);
         assert_eq!(expanded[0].w1, 0xda0e6452);
         assert_eq!(expanded[0].w2, 0xc810f32b);
         assert_eq!(expanded[0].w3, 0x809079e5);
 
-        // Verify that the key expansion is deterministic
         let expanded2 = key_expansion_192(&key);
         for i in 0..13 {
             assert_eq!(expanded[i], expanded2[i]);
         }
 
-        // Verify that each round key is different
         for i in 1..13 {
             assert_ne!(expanded[i], expanded[0]);
         }
 
-        // Verify that the key schedule is reversible
         let dec_schedule = inverse_key_schedule_192(&expanded);
         assert_eq!(dec_schedule[0], expanded[12]);
         assert_eq!(dec_schedule[12], expanded[0]);
 
-        // Verify that intermediate keys have been transformed with inv_mix_block
         let expected_inv_mix = inv_mix_block(expanded[11]);
         assert_eq!(dec_schedule[1], expected_inv_mix);
     }
 
-    // AES-256 test vector
     #[test]
     fn test_key_expansion_256() {
-        // FIPS 197 Appendix A.3 - AES-256 test vector
         let key = [
             0x60, 0x3d, 0xeb, 0x10, 0x15, 0xca, 0x71, 0xbe, 0x2b, 0x73, 0xae, 0xf0, 0x85, 0x7d,
             0x77, 0x81, 0x1f, 0x35, 0x2c, 0x07, 0x3b, 0x61, 0x08, 0xd7, 0x2d, 0x98, 0x10, 0xa3,
@@ -640,44 +603,36 @@ mod tests {
 
         let expanded = key_expansion_256(&key);
 
-        // Verify the number of round keys
         assert_eq!(expanded.len(), 15);
 
-        // Verify the first round key contains the original key bytes
         assert_eq!(expanded[0].w0, 0x603deb10);
         assert_eq!(expanded[0].w1, 0x15ca71be);
         assert_eq!(expanded[0].w2, 0x2b73aef0);
         assert_eq!(expanded[0].w3, 0x857d7781);
 
-        // Verify the second round key contains the rest of the original key bytes
         assert_eq!(expanded[1].w0, 0x1f352c07);
         assert_eq!(expanded[1].w1, 0x3b6108d7);
         assert_eq!(expanded[1].w2, 0x2d9810a3);
         assert_eq!(expanded[1].w3, 0x0914dff4);
 
-        // Verify that the key expansion is deterministic
         let expanded2 = key_expansion_256(&key);
         for i in 0..15 {
             assert_eq!(expanded[i], expanded2[i]);
         }
 
-        // Verify that each round key is different
         for i in 2..15 {
             assert_ne!(expanded[i], expanded[0]);
             assert_ne!(expanded[i], expanded[1]);
         }
 
-        // Verify that the key schedule is reversible
         let dec_schedule = inverse_key_schedule_256(&expanded);
         assert_eq!(dec_schedule[0], expanded[14]);
         assert_eq!(dec_schedule[14], expanded[0]);
 
-        // Verify that intermediate keys have been transformed with inv_mix_block
         let expected_inv_mix = inv_mix_block(expanded[13]);
         assert_eq!(dec_schedule[1], expected_inv_mix);
     }
 
-    // Test the inverse key schedule for AES-128
     #[test]
     fn test_inverse_key_schedule_128() {
         let key = [
@@ -688,13 +643,10 @@ mod tests {
         let enc_schedule = key_expansion_128(&key);
         let dec_schedule = inverse_key_schedule_128(&enc_schedule);
 
-        // First key in decryption schedule should be the last key from encryption schedule
         assert_eq!(dec_schedule[0], enc_schedule[10]);
 
-        // Last key in decryption schedule should be the first key from encryption schedule
         assert_eq!(dec_schedule[10], enc_schedule[0]);
 
-        // Check that intermediate keys have been transformed with inv_mix_block
         let expected_inv_mix = inv_mix_block(enc_schedule[9]);
         assert_eq!(dec_schedule[1], expected_inv_mix);
     }
