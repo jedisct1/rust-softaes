@@ -116,10 +116,10 @@ fn mul0x0e(x: u8) -> u8 {
 #[inline(always)]
 pub fn inv_mix_block(block: Block) -> Block {
     let mut state = [0u8; 16];
-    state[0..4].copy_from_slice(&block.w0.to_be_bytes());
-    state[4..8].copy_from_slice(&block.w1.to_be_bytes());
-    state[8..12].copy_from_slice(&block.w2.to_be_bytes());
-    state[12..16].copy_from_slice(&block.w3.to_be_bytes());
+    state[0..4].copy_from_slice(&block.w0.to_le_bytes());
+    state[4..8].copy_from_slice(&block.w1.to_le_bytes());
+    state[8..12].copy_from_slice(&block.w2.to_le_bytes());
+    state[12..16].copy_from_slice(&block.w3.to_le_bytes());
 
     for col in 0..4 {
         let i = 4 * col;
@@ -156,12 +156,25 @@ pub fn inv_mix_block(block: Block) -> Block {
             (a0_x8 ^ a0_x2 ^ a0) ^ (a1_x8 ^ a1_x4 ^ a1) ^ (a2_x8 ^ a2) ^ (a3_x8 ^ a3_x4 ^ a3_x2);
     }
 
-    let w0 = u32::from_be_bytes(state[0..4].try_into().unwrap());
-    let w1 = u32::from_be_bytes(state[4..8].try_into().unwrap());
-    let w2 = u32::from_be_bytes(state[8..12].try_into().unwrap());
-    let w3 = u32::from_be_bytes(state[12..16].try_into().unwrap());
+    let w0 = u32::from_le_bytes(state[0..4].try_into().unwrap());
+    let w1 = u32::from_le_bytes(state[4..8].try_into().unwrap());
+    let w2 = u32::from_le_bytes(state[8..12].try_into().unwrap());
+    let w3 = u32::from_le_bytes(state[12..16].try_into().unwrap());
 
     Block { w0, w1, w2, w3 }
+}
+
+/// Packs four consecutive expansion words into a round key. The expansion
+/// computes each word big-endian (row 0 in the high byte), whereas the round
+/// function and `Block::from_bytes` expect the little-endian column layout, so
+/// each word is byte-swapped.
+fn pack_round_key(w: &[u32], j: usize) -> Block {
+    Block {
+        w0: w[j].swap_bytes(),
+        w1: w[j + 1].swap_bytes(),
+        w2: w[j + 2].swap_bytes(),
+        w3: w[j + 3].swap_bytes(),
+    }
 }
 
 pub fn key_expansion_128(key: &[u8; 16]) -> [Block; 11] {
@@ -187,12 +200,7 @@ pub fn key_expansion_128(key: &[u8; 16]) -> [Block; 11] {
     }; 11];
     for (i, block) in blocks.iter_mut().enumerate() {
         let j = 4 * i;
-        *block = Block {
-            w0: w[j],
-            w1: w[j + 1],
-            w2: w[j + 2],
-            w3: w[j + 3],
-        };
+        *block = pack_round_key(&w, j);
     }
     blocks
 }
@@ -220,12 +228,7 @@ pub fn key_expansion_192(key: &[u8; 24]) -> [Block; 13] {
     }; 13];
     for (i, block) in blocks.iter_mut().enumerate() {
         let j = 4 * i;
-        *block = Block {
-            w0: w[j],
-            w1: w[j + 1],
-            w2: w[j + 2],
-            w3: w[j + 3],
-        };
+        *block = pack_round_key(&w, j);
     }
     blocks
 }
@@ -255,12 +258,7 @@ pub fn key_expansion_256(key: &[u8; 32]) -> [Block; 15] {
     }; 15];
     for (i, block) in blocks.iter_mut().enumerate() {
         let j = 4 * i;
-        *block = Block {
-            w0: w[j],
-            w1: w[j + 1],
-            w2: w[j + 2],
-            w3: w[j + 3],
-        };
+        *block = pack_round_key(&w, j);
     }
     blocks
 }
@@ -293,62 +291,6 @@ fn apply_inv_sbox_to_block(block: Block) -> Block {
 }
 
 #[inline(always)]
-fn opt_inv_mix_block(block: Block) -> Block {
-    let mut state = [0u8; 16];
-    state[0..4].copy_from_slice(&block.w0.to_be_bytes());
-    state[4..8].copy_from_slice(&block.w1.to_be_bytes());
-    state[8..12].copy_from_slice(&block.w2.to_be_bytes());
-    state[12..16].copy_from_slice(&block.w3.to_be_bytes());
-
-    for col in 0..4 {
-        let i = 4 * col;
-        let a0 = state[i];
-        let a1 = state[i + 1];
-        let a2 = state[i + 2];
-        let a3 = state[i + 3];
-
-        let a0_x2 = xtime(a0);
-        let a1_x2 = xtime(a1);
-        let a2_x2 = xtime(a2);
-        let a3_x2 = xtime(a3);
-
-        let a0_x4 = xtime(a0_x2);
-        let a1_x4 = xtime(a1_x2);
-        let a2_x4 = xtime(a2_x2);
-        let a3_x4 = xtime(a3_x2);
-
-        let a0_x8 = xtime(a0_x4);
-        let a1_x8 = xtime(a1_x4);
-        let a2_x8 = xtime(a2_x4);
-        let a3_x8 = xtime(a3_x4);
-
-        let b0 =
-            (a0_x8 ^ a0_x4 ^ a0_x2) ^ (a1_x8 ^ a1_x2 ^ a1) ^ (a2_x8 ^ a2_x4 ^ a2) ^ (a3_x8 ^ a3);
-
-        let b1 =
-            (a0_x8 ^ a0) ^ (a1_x8 ^ a1_x4 ^ a1_x2) ^ (a2_x8 ^ a2_x2 ^ a2) ^ (a3_x8 ^ a3_x4 ^ a3);
-
-        let b2 =
-            (a0_x8 ^ a0_x4 ^ a0) ^ (a1_x8 ^ a1) ^ (a2_x8 ^ a2_x4 ^ a2_x2) ^ (a3_x8 ^ a3_x2 ^ a3);
-
-        let b3 =
-            (a0_x8 ^ a0_x2 ^ a0) ^ (a1_x8 ^ a1_x4 ^ a1) ^ (a2_x8 ^ a2) ^ (a3_x8 ^ a3_x4 ^ a3_x2);
-
-        state[i] = sbox_inv(b0);
-        state[i + 1] = sbox_inv(b1);
-        state[i + 2] = sbox_inv(b2);
-        state[i + 3] = sbox_inv(b3);
-    }
-
-    let w0 = u32::from_be_bytes(state[0..4].try_into().unwrap());
-    let w1 = u32::from_be_bytes(state[4..8].try_into().unwrap());
-    let w2 = u32::from_be_bytes(state[8..12].try_into().unwrap());
-    let w3 = u32::from_be_bytes(state[12..16].try_into().unwrap());
-
-    Block { w0, w1, w2, w3 }
-}
-
-#[inline(always)]
 pub fn optimized_inverse_key_schedule_128(enc: &[Block; 11]) -> [Block; 11] {
     let mut dec = [Block {
         w0: 0,
@@ -358,7 +300,7 @@ pub fn optimized_inverse_key_schedule_128(enc: &[Block; 11]) -> [Block; 11] {
     }; 11];
     dec[0] = enc[10];
     for i in 1..10 {
-        dec[i] = opt_inv_mix_block(enc[10 - i]);
+        dec[i] = inv_mix_block(enc[10 - i]);
     }
     dec[10] = enc[0];
     dec
@@ -390,7 +332,7 @@ pub fn optimized_inverse_key_schedule_192(enc: &[Block; 13]) -> [Block; 13] {
     }; 13];
     dec[0] = enc[12];
     for i in 1..12 {
-        dec[i] = opt_inv_mix_block(enc[12 - i]);
+        dec[i] = inv_mix_block(enc[12 - i]);
     }
     dec[12] = enc[0];
     dec
@@ -422,7 +364,7 @@ pub fn optimized_inverse_key_schedule_256(enc: &[Block; 15]) -> [Block; 15] {
     }; 15];
     dec[0] = enc[14];
     for i in 1..14 {
-        dec[i] = opt_inv_mix_block(enc[14 - i]);
+        dec[i] = inv_mix_block(enc[14 - i]);
     }
     dec[14] = enc[0];
     dec
@@ -431,6 +373,19 @@ pub fn optimized_inverse_key_schedule_256(enc: &[Block; 15]) -> [Block; 15] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reads a round key back as the four big-endian words of FIPS 197, so the
+    /// recognizable test vectors can be compared against the little-endian
+    /// `Block` layout the round function actually consumes.
+    fn fips_words(block: &Block) -> [u32; 4] {
+        let b = block.to_bytes();
+        [
+            u32::from_be_bytes([b[0], b[1], b[2], b[3]]),
+            u32::from_be_bytes([b[4], b[5], b[6], b[7]]),
+            u32::from_be_bytes([b[8], b[9], b[10], b[11]]),
+            u32::from_be_bytes([b[12], b[13], b[14], b[15]]),
+        ]
+    }
 
     #[test]
     fn test_key_expansion_128() {
@@ -444,31 +399,24 @@ mod tests {
 
         assert_eq!(expanded.len(), 11);
 
-        assert_eq!(expanded[0].w0, 0x2b7e1516);
-        assert_eq!(expanded[0].w1, 0x28aed2a6);
-        assert_eq!(expanded[0].w2, 0xabf71588);
-        assert_eq!(expanded[0].w3, 0x09cf4f3c);
-
-        assert_eq!(expanded[10].w0, 0xd014f9a8);
-        assert_eq!(expanded[10].w1, 0xc9ee2589);
-        assert_eq!(expanded[10].w2, 0xe13f0cc8);
-        assert_eq!(expanded[10].w3, 0xb6630ca6);
+        assert_eq!(
+            fips_words(&expanded[0]),
+            [0x2b7e1516, 0x28aed2a6, 0xabf71588, 0x09cf4f3c]
+        );
+        assert_eq!(
+            fips_words(&expanded[10]),
+            [0xd014f9a8, 0xc9ee2589, 0xe13f0cc8, 0xb6630ca6]
+        );
 
         let expanded2 = key_expansion_128(&key);
         for i in 0..11 {
             assert_eq!(expanded[i], expanded2[i]);
         }
 
-        // Verify the last round key
-        assert_eq!(expanded[10].w0, 0xd014f9a8);
-        assert_eq!(expanded[10].w1, 0xc9ee2589);
-        assert_eq!(expanded[10].w2, 0xe13f0cc8);
-        assert_eq!(expanded[10].w3, 0xb6630ca6);
-
-        assert_eq!(expanded[4].w0, 0xef44a541);
-        assert_eq!(expanded[4].w1, 0xa8525b7f);
-        assert_eq!(expanded[4].w2, 0xb671253b);
-        assert_eq!(expanded[4].w3, 0xdb0bad00);
+        assert_eq!(
+            fips_words(&expanded[4]),
+            [0xef44a541, 0xa8525b7f, 0xb671253b, 0xdb0bad00]
+        );
 
         let dec_schedule = inverse_key_schedule_128(&expanded);
         let opt_dec_schedule = optimized_inverse_key_schedule_128(&expanded);
@@ -493,12 +441,12 @@ mod tests {
 
         let expanded = key_expansion_192(&key);
 
-        assert_eq!(expanded[0].w0, 0x8e73b0f7);
-        assert_eq!(expanded[0].w1, 0xda0e6452);
-        assert_eq!(expanded[0].w2, 0xc810f32b);
-        assert_eq!(expanded[0].w3, 0x809079e5);
-        assert_eq!(expanded[1].w0, 0x62f8ead2);
-        assert_eq!(expanded[1].w1, 0x522c6b7b);
+        assert_eq!(
+            fips_words(&expanded[0]),
+            [0x8e73b0f7, 0xda0e6452, 0xc810f32b, 0x809079e5]
+        );
+        assert_eq!(fips_words(&expanded[1])[0], 0x62f8ead2);
+        assert_eq!(fips_words(&expanded[1])[1], 0x522c6b7b);
 
         let expanded2 = key_expansion_192(&key);
         for i in 0..13 {
@@ -527,19 +475,18 @@ mod tests {
 
         let expanded = key_expansion_256(&key);
 
-        assert_eq!(expanded[0].w0, 0x603deb10);
-        assert_eq!(expanded[0].w1, 0x15ca71be);
-        assert_eq!(expanded[0].w2, 0x2b73aef0);
-        assert_eq!(expanded[0].w3, 0x857d7781);
-        assert_eq!(expanded[1].w0, 0x1f352c07);
-        assert_eq!(expanded[1].w1, 0x3b6108d7);
-        assert_eq!(expanded[1].w2, 0x2d9810a3);
-        assert_eq!(expanded[1].w3, 0x0914dff4);
-
-        assert_eq!(expanded[14].w0, 0xfe4890d1);
-        assert_eq!(expanded[14].w1, 0xe6188d0b);
-        assert_eq!(expanded[14].w2, 0x046df344);
-        assert_eq!(expanded[14].w3, 0x706c631e);
+        assert_eq!(
+            fips_words(&expanded[0]),
+            [0x603deb10, 0x15ca71be, 0x2b73aef0, 0x857d7781]
+        );
+        assert_eq!(
+            fips_words(&expanded[1]),
+            [0x1f352c07, 0x3b6108d7, 0x2d9810a3, 0x0914dff4]
+        );
+        assert_eq!(
+            fips_words(&expanded[14]),
+            [0xfe4890d1, 0xe6188d0b, 0x046df344, 0x706c631e]
+        );
 
         let dec_schedule = inverse_key_schedule_256(&expanded);
         let opt_dec_schedule = optimized_inverse_key_schedule_256(&expanded);

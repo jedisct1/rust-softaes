@@ -158,12 +158,13 @@ fn mul0x0e(x: u8) -> u8 {
 
 /// Applies the inverse MixColumns transformation to an entire Block.
 pub fn inv_mix_block(block: Block) -> Block {
-    // Extract the 16 bytes from the 4 words (AES state is column-major).
+    // Extract the 16 bytes from the 4 words. Each word holds one column in
+    // little-endian order, so its low byte is row 0 of that column.
     let mut state = [0u8; 16];
-    state[0..4].copy_from_slice(&block.w0.to_be_bytes());
-    state[4..8].copy_from_slice(&block.w1.to_be_bytes());
-    state[8..12].copy_from_slice(&block.w2.to_be_bytes());
-    state[12..16].copy_from_slice(&block.w3.to_be_bytes());
+    state[0..4].copy_from_slice(&block.w0.to_le_bytes());
+    state[4..8].copy_from_slice(&block.w1.to_le_bytes());
+    state[8..12].copy_from_slice(&block.w2.to_le_bytes());
+    state[12..16].copy_from_slice(&block.w3.to_le_bytes());
 
     // For each of the 4 columns, apply the InvMixColumns matrix multiplication.
     // Each column is (a0, a1, a2, a3). The new column (b0, b1, b2, b3) is:
@@ -185,11 +186,11 @@ pub fn inv_mix_block(block: Block) -> Block {
         state[i + 3] = mul0x0b(a0) ^ mul0x0d(a1) ^ mul0x09(a2) ^ mul0x0e(a3);
     }
 
-    // Reassemble the bytes into four u32 words, in big-endian order.
-    let w0 = u32::from_be_bytes(state[0..4].try_into().unwrap());
-    let w1 = u32::from_be_bytes(state[4..8].try_into().unwrap());
-    let w2 = u32::from_be_bytes(state[8..12].try_into().unwrap());
-    let w3 = u32::from_be_bytes(state[12..16].try_into().unwrap());
+    // Reassemble the bytes into four little-endian column words.
+    let w0 = u32::from_le_bytes(state[0..4].try_into().unwrap());
+    let w1 = u32::from_le_bytes(state[4..8].try_into().unwrap());
+    let w2 = u32::from_le_bytes(state[8..12].try_into().unwrap());
+    let w3 = u32::from_le_bytes(state[12..16].try_into().unwrap());
 
     Block { w0, w1, w2, w3 }
 }
@@ -209,9 +210,19 @@ pub fn opt_inv_mix_block(block: Block) -> Block {
     apply_inv_sbox_to_block(inv_mix_block(block))
 }
 
-/// ====================
-/// Key Expansion Functions
-/// ====================
+/// Packs four consecutive expansion words into a round key. The expansion
+/// computes each word big-endian (row 0 in the high byte), whereas the round
+/// function and `Block::from_bytes` expect the little-endian column layout, so
+/// each word is byte-swapped.
+fn pack_round_key(w: &[u32], j: usize) -> Block {
+    Block {
+        w0: w[j].swap_bytes(),
+        w1: w[j + 1].swap_bytes(),
+        w2: w[j + 2].swap_bytes(),
+        w3: w[j + 3].swap_bytes(),
+    }
+}
+
 /// Expands a 16-byte AES-128 key into 11 128-bit blocks.
 pub fn key_expansion_128(key: &[u8; 16]) -> [Block; 11] {
     const NK: usize = 4;
@@ -245,12 +256,7 @@ pub fn key_expansion_128(key: &[u8; 16]) -> [Block; 11] {
     let mut i = 0;
     while i < 11 {
         let j = i * 4;
-        blocks[i] = Block {
-            w0: w[j],
-            w1: w[j + 1],
-            w2: w[j + 2],
-            w3: w[j + 3],
-        };
+        blocks[i] = pack_round_key(&w, j);
         i += 1;
     }
     blocks
@@ -287,12 +293,7 @@ pub fn key_expansion_192(key: &[u8; 24]) -> [Block; 13] {
     let mut i = 0;
     while i < 13 {
         let j = i * 4;
-        blocks[i] = Block {
-            w0: w[j],
-            w1: w[j + 1],
-            w2: w[j + 2],
-            w3: w[j + 3],
-        };
+        blocks[i] = pack_round_key(&w, j);
         i += 1;
     }
     blocks
@@ -331,12 +332,7 @@ pub fn key_expansion_256(key: &[u8; 32]) -> [Block; 15] {
     let mut i = 0;
     while i < 15 {
         let j = i * 4;
-        blocks[i] = Block {
-            w0: w[j],
-            w1: w[j + 1],
-            w2: w[j + 2],
-            w3: w[j + 3],
-        };
+        blocks[i] = pack_round_key(&w, j);
         i += 1;
     }
     blocks
@@ -460,6 +456,19 @@ pub fn optimized_inverse_key_schedule_256(enc: &[Block; 15]) -> [Block; 15] {
 mod tests {
     use super::*;
 
+    /// Reads a round key back as the four big-endian words of FIPS 197, so the
+    /// recognizable test vectors can be compared against the little-endian
+    /// `Block` layout the round function actually consumes.
+    fn fips_words(block: &Block) -> [u32; 4] {
+        let b = block.to_bytes();
+        [
+            u32::from_be_bytes([b[0], b[1], b[2], b[3]]),
+            u32::from_be_bytes([b[4], b[5], b[6], b[7]]),
+            u32::from_be_bytes([b[8], b[9], b[10], b[11]]),
+            u32::from_be_bytes([b[12], b[13], b[14], b[15]]),
+        ]
+    }
+
     #[test]
     fn test_optimized_inverse_key_schedule() {
         let key_128 = [
@@ -522,10 +531,10 @@ mod tests {
 
         let expanded = key_expansion_128(&key);
         assert_eq!(expanded.len(), 11);
-        assert_eq!(expanded[0].w0, 0x2b7e1516);
-        assert_eq!(expanded[0].w1, 0x28aed2a6);
-        assert_eq!(expanded[0].w2, 0xabf71588);
-        assert_eq!(expanded[0].w3, 0x09cf4f3c);
+        assert_eq!(
+            fips_words(&expanded[0]),
+            [0x2b7e1516, 0x28aed2a6, 0xabf71588, 0x09cf4f3c]
+        );
 
         // Verify that the key expansion is deterministic
         let expanded2 = key_expansion_128(&key);
@@ -533,15 +542,14 @@ mod tests {
             assert_eq!(expanded[i], expanded2[i]);
         }
 
-        assert_eq!(expanded[10].w0, 0xd014f9a8);
-        assert_eq!(expanded[10].w1, 0xc9ee2589);
-        assert_eq!(expanded[10].w2, 0xe13f0cc8);
-        assert_eq!(expanded[10].w3, 0xb6630ca6);
-
-        assert_eq!(expanded[4].w0, 0xef44a541);
-        assert_eq!(expanded[4].w1, 0xa8525b7f);
-        assert_eq!(expanded[4].w2, 0xb671253b);
-        assert_eq!(expanded[4].w3, 0xdb0bad00);
+        assert_eq!(
+            fips_words(&expanded[10]),
+            [0xd014f9a8, 0xc9ee2589, 0xe13f0cc8, 0xb6630ca6]
+        );
+        assert_eq!(
+            fips_words(&expanded[4]),
+            [0xef44a541, 0xa8525b7f, 0xb671253b, 0xdb0bad00]
+        );
 
         // Verify that each round key is different
         for i in 1..11 {
@@ -569,10 +577,10 @@ mod tests {
 
         assert_eq!(expanded.len(), 13);
 
-        assert_eq!(expanded[0].w0, 0x8e73b0f7);
-        assert_eq!(expanded[0].w1, 0xda0e6452);
-        assert_eq!(expanded[0].w2, 0xc810f32b);
-        assert_eq!(expanded[0].w3, 0x809079e5);
+        assert_eq!(
+            fips_words(&expanded[0]),
+            [0x8e73b0f7, 0xda0e6452, 0xc810f32b, 0x809079e5]
+        );
 
         let expanded2 = key_expansion_192(&key);
         for i in 0..13 {
@@ -603,15 +611,14 @@ mod tests {
 
         assert_eq!(expanded.len(), 15);
 
-        assert_eq!(expanded[0].w0, 0x603deb10);
-        assert_eq!(expanded[0].w1, 0x15ca71be);
-        assert_eq!(expanded[0].w2, 0x2b73aef0);
-        assert_eq!(expanded[0].w3, 0x857d7781);
-
-        assert_eq!(expanded[1].w0, 0x1f352c07);
-        assert_eq!(expanded[1].w1, 0x3b6108d7);
-        assert_eq!(expanded[1].w2, 0x2d9810a3);
-        assert_eq!(expanded[1].w3, 0x0914dff4);
+        assert_eq!(
+            fips_words(&expanded[0]),
+            [0x603deb10, 0x15ca71be, 0x2b73aef0, 0x857d7781]
+        );
+        assert_eq!(
+            fips_words(&expanded[1]),
+            [0x1f352c07, 0x3b6108d7, 0x2d9810a3, 0x0914dff4]
+        );
 
         let expanded2 = key_expansion_256(&key);
         for i in 0..15 {
