@@ -355,22 +355,101 @@ mod srm1r {
         planes[7] = pair[0] ^ adj[7] ^ opp[7];
     }
 
-    /// AES forward round function (SubBytes, ShiftRows, MixColumns, AddRoundKey).
-    #[inline]
-    pub fn block_encrypt(block: &Block, rk: &Block) -> Block {
-        let row0 = load_row_words(block, 0);
-        let row1 = load_row_words(block, 8).rotate_right(8);
-        let row2 = load_row_words(block, 16).rotate_right(16);
-        let row3 = load_row_words(block, 24).rotate_right(24);
+    /// Multiplies every lane byte by 2 in GF(2^8) on the bit-plane representation.
+    /// A left shift by one bit moves each plane down, and the carry out of bit 7
+    /// is folded back into bits 0, 1, 3, and 4 (the set bits of the reduction
+    /// polynomial 0x1b).
+    #[inline(always)]
+    fn xtime(q: &[u32; 8]) -> [u32; 8] {
+        let carry = q[0];
+        [
+            q[1],
+            q[2],
+            q[3],
+            q[4] ^ carry,
+            q[5] ^ carry,
+            q[6],
+            q[7] ^ carry,
+            carry,
+        ]
+    }
 
-        let mut planes = pack_planes(row0, row1, row2, row3);
-        subbytes(&mut planes);
-        mix_columns(&mut planes);
+    /// Applies the inverse of the AES S-box affine map to every lane byte. Each
+    /// output bit is `b[i+2] ^ b[i+5] ^ b[i+7]` (indices mod 8) with the constant
+    /// 0x05 added; here the planes are ordered most-significant bit first, so the
+    /// indices are mirrored and the constant lands on the bit-4 and bit-0 planes.
+    #[inline(always)]
+    fn inv_affine(q: &mut [u32; 8]) {
+        const ONES: u32 = 0xffff_ffff;
+        *q = [
+            q[6] ^ q[3] ^ q[1],
+            q[7] ^ q[4] ^ q[2],
+            q[0] ^ q[5] ^ q[3],
+            q[1] ^ q[6] ^ q[4],
+            q[2] ^ q[7] ^ q[5],
+            q[3] ^ q[0] ^ q[6] ^ ONES,
+            q[4] ^ q[1] ^ q[7],
+            q[5] ^ q[2] ^ q[0] ^ ONES,
+        ];
+    }
 
-        let row0 = unpack_row_word(&planes, 0);
-        let row1 = unpack_row_word(&planes, 1);
-        let row2 = unpack_row_word(&planes, 2);
-        let row3 = unpack_row_word(&planes, 3);
+    /// Inverse S-box. Because the forward S-box is `affine(inverse(x))` and the
+    /// GF(2^8) inversion is an involution, the inverse S-box is just
+    /// `inv_affine(sbox(inv_affine(x)))`, which lets it reuse the forward circuit.
+    fn inv_subbytes(planes: &mut [u32; 8]) {
+        inv_affine(planes);
+        subbytes(planes);
+        inv_affine(planes);
+    }
+
+    fn inv_mix_columns(planes: &mut [u32; 8]) {
+        let m2 = xtime(planes);
+        let m4 = xtime(&m2);
+        let m8 = xtime(&m4);
+
+        let mut c9 = [0u32; 8];
+        let mut cb = [0u32; 8];
+        let mut cd = [0u32; 8];
+        let mut ce = [0u32; 8];
+        for k in 0..8 {
+            c9[k] = m8[k] ^ planes[k];
+            cb[k] = m8[k] ^ m2[k] ^ planes[k];
+            cd[k] = m8[k] ^ m4[k] ^ planes[k];
+            ce[k] = m8[k] ^ m4[k] ^ m2[k];
+        }
+
+        for k in 0..8 {
+            planes[k] =
+                ce[k] ^ cb[k].rotate_right(4) ^ cd[k].rotate_right(8) ^ c9[k].rotate_right(12);
+        }
+    }
+
+    #[inline(always)]
+    fn load_rows_fwd(block: &Block) -> [u32; 4] {
+        [
+            load_row_words(block, 0),
+            load_row_words(block, 8).rotate_right(8),
+            load_row_words(block, 16).rotate_right(16),
+            load_row_words(block, 24).rotate_right(24),
+        ]
+    }
+
+    #[inline(always)]
+    fn load_rows_inv(block: &Block) -> [u32; 4] {
+        [
+            load_row_words(block, 0),
+            load_row_words(block, 8).rotate_left(8),
+            load_row_words(block, 16).rotate_left(16),
+            load_row_words(block, 24).rotate_left(24),
+        ]
+    }
+
+    #[inline(always)]
+    fn store_columns(planes: &[u32; 8], rk: &Block) -> Block {
+        let row0 = unpack_row_word(planes, 0);
+        let row1 = unpack_row_word(planes, 1);
+        let row2 = unpack_row_word(planes, 2);
+        let row3 = unpack_row_word(planes, 3);
 
         Block {
             w0: store_column_word(row0, row1, row2, row3, 0) ^ rk.w0,
@@ -378,6 +457,47 @@ mod srm1r {
             w2: store_column_word(row0, row1, row2, row3, 16) ^ rk.w2,
             w3: store_column_word(row0, row1, row2, row3, 24) ^ rk.w3,
         }
+    }
+
+    /// AES forward round (SubBytes, ShiftRows, MixColumns, AddRoundKey).
+    #[inline]
+    pub fn block_encrypt(block: &Block, rk: &Block) -> Block {
+        let [row0, row1, row2, row3] = load_rows_fwd(block);
+        let mut planes = pack_planes(row0, row1, row2, row3);
+        subbytes(&mut planes);
+        mix_columns(&mut planes);
+        store_columns(&planes, rk)
+    }
+
+    /// AES final forward round (SubBytes, ShiftRows, AddRoundKey, no MixColumns).
+    #[inline]
+    pub fn block_encrypt_last(block: &Block, rk: &Block) -> Block {
+        let [row0, row1, row2, row3] = load_rows_fwd(block);
+        let mut planes = pack_planes(row0, row1, row2, row3);
+        subbytes(&mut planes);
+        store_columns(&planes, rk)
+    }
+
+    /// AES inverse round (InvShiftRows, InvSubBytes, InvMixColumns, AddRoundKey).
+    /// The round key must already be transformed for the equivalent inverse
+    /// cipher, as produced by `key_schedule::inverse_key_schedule_*`.
+    #[inline]
+    pub fn block_decrypt(block: &Block, rk: &Block) -> Block {
+        let [row0, row1, row2, row3] = load_rows_inv(block);
+        let mut planes = pack_planes(row0, row1, row2, row3);
+        inv_subbytes(&mut planes);
+        inv_mix_columns(&mut planes);
+        store_columns(&planes, rk)
+    }
+
+    /// AES final inverse round (InvShiftRows, InvSubBytes, AddRoundKey, no
+    /// InvMixColumns).
+    #[inline]
+    pub fn block_decrypt_last(block: &Block, rk: &Block) -> Block {
+        let [row0, row1, row2, row3] = load_rows_inv(block);
+        let mut planes = pack_planes(row0, row1, row2, row3);
+        inv_subbytes(&mut planes);
+        store_columns(&planes, rk)
     }
 }
 
@@ -393,6 +513,27 @@ impl SoftAes {
     #[inline]
     pub fn block_encrypt(block: &Block, rk: &Block) -> Block {
         srm1r::block_encrypt(block, rk)
+    }
+
+    /// AES decryption round function.
+    /// `rk` is the round key from the inverse key schedule.
+    #[inline]
+    pub fn block_decrypt(block: &Block, rk: &Block) -> Block {
+        srm1r::block_decrypt(block, rk)
+    }
+
+    /// AES forward round function for the last round.
+    /// `rk` is the round key.
+    #[inline]
+    pub fn block_encrypt_last(block: &Block, rk: &Block) -> Block {
+        srm1r::block_encrypt_last(block, rk)
+    }
+
+    /// AES final decryption round.
+    /// `rk` is the round key from the inverse key schedule.
+    #[inline]
+    pub fn block_decrypt_last(block: &Block, rk: &Block) -> Block {
+        srm1r::block_decrypt_last(block, rk)
     }
 }
 

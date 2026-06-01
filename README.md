@@ -34,10 +34,18 @@ secret, or when you have already accepted that risk.
 softaes = "0.1"
 ```
 
-## Using the constant-time round
+## The round functions
 
-`SoftAes::block_encrypt` applies one full forward round: SubBytes, ShiftRows,
-MixColumns, and then AddRoundKey with the round key you pass in.
+Both `SoftAes` (constant-time) and `softaes::unprotected::SoftAes` (table-based)
+expose the same four round functions, so you can switch paths by changing one
+import:
+
+- `block_encrypt` — a full forward round: SubBytes, ShiftRows, MixColumns, then
+  AddRoundKey.
+- `block_encrypt_last` — the final forward round, which omits MixColumns.
+- `block_decrypt` — a full inverse round, expecting a round key from the inverse
+  key schedule.
+- `block_decrypt_last` — the final inverse round.
 
 ```rust
 use softaes::{Block, SoftAes};
@@ -56,16 +64,14 @@ constant-time `SoftAes`, kept so existing code keeps compiling.
 
 ## Building the full cipher
 
-A standard AES encryption is the initial AddRoundKey, a number of full rounds,
-and a final round that omits MixColumns. The constant-time path deliberately
-exposes only the full round, which is all the AES-round constructions need. To
-assemble the complete cipher, including the final round and decryption, use the
-`unprotected` module, which provides `block_encrypt`, `block_encrypt_last`,
-`block_decrypt`, and `block_decrypt_last`.
+A standard AES encryption is the initial AddRoundKey, a run of full rounds, and a
+final round that omits MixColumns; decryption mirrors it with the inverse rounds
+and the inverse key schedule. Either path can do the whole thing — the example
+below uses the constant-time one.
 
 ```rust
-use softaes::unprotected::{Block, SoftAes};
-use softaes::unprotected::key_schedule::key_expansion_128;
+use softaes::key_schedule::{inverse_key_schedule_128, key_expansion_128};
+use softaes::{Block, SoftAes};
 
 let key = [0u8; 16];
 let plaintext = [0u8; 16];
@@ -76,7 +82,15 @@ let mut state = Block::from_bytes(&plaintext).xor(&round_keys[0]);
 for rk in &round_keys[1..10] {
     state = SoftAes::block_encrypt(&state, rk);
 }
-let ciphertext = SoftAes::block_encrypt_last(&state, &round_keys[10]).to_bytes();
+let ciphertext = SoftAes::block_encrypt_last(&state, &round_keys[10]);
+
+let dec_keys = inverse_key_schedule_128(&round_keys);
+let mut state = ciphertext.xor(&dec_keys[0]);
+for rk in &dec_keys[1..10] {
+    state = SoftAes::block_decrypt(&state, rk);
+}
+let recovered = SoftAes::block_decrypt_last(&state, &dec_keys[10]).to_bytes();
+assert_eq!(recovered, plaintext);
 ```
 
 ## Key schedule
