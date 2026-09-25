@@ -1,6 +1,6 @@
 [package]
 name = "softaes"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 categories = ["no-std", "cryptography", "wasm"]
 keywords = ["aes", "aes-round", "software", "no-std", "cryptography"]
