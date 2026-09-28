@@ -9,7 +9,7 @@ homepage = "https://github.com/jedisct1/rust-softaes"
 repository = "https://github.com/jedisct1/rust-softaes"
 authors = ["Frank Denis <github@pureftpd.org>"]
 description = "Software AES round functions and key scheduling in pure Rust, with no_std support and no hardware AES requirement"
-include = ["src/**/*.rs", "tests/**/*.rs", "benches/**/*.rs", "LICENSE"]
+include = ["/src/**/*.rs", "/README.md", "/LICENSE"]
 
 [[bench]]
 name = "rounds"
