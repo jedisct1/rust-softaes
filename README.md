@@ -14,13 +14,10 @@ The code is `no_std`, has no dependencies, and runs anywhere Rust runs.
 
 The crate ships two round functions and lets you pick the trade-off explicitly.
 
-The default path, at the crate root, is **constant-time**. The round is computed
-with a bitsliced representation (called SRM-1R) that holds the block as eight
-32-bit bit planes. ShiftRows is folded into the input packing, SubBytes is a
-gate-only Boolean S-box circuit, and MixColumns is a fixed sequence of rotations
-and XORs. No step ever indexes memory with secret data, so the round runs in
-constant time on every platform. This is the one to reach for when the input is
-secret.
+The default path, at the crate root, constant-time.
+
+Only the S-box step is bitsliced, using logic gates instead of a table.
+The other steps work directly on the bytes, which keeps them cheap.
 
 The `unprotected` module is a classic table-based implementation. It is faster
 on machines with good caches, but the table lookups are indexed by secret data,
