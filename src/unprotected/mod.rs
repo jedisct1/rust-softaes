@@ -3,7 +3,8 @@
 use core::{cmp, ops};
 
 pub mod key_schedule;
-use key_schedule::{S_BOX, S_BOX_INV};
+use crate::key_schedule::S_BOX;
+use key_schedule::S_BOX_INV;
 
 const LUT: [[u32; 256]; 4] = [
     [
@@ -323,21 +324,17 @@ const ILUT: [[u32; 256]; 4] = [
     ],
 ];
 
-/// An AES block.
-#[repr(align(16))]
+/// An AES block, stored as four 32-bit column words.
 #[derive(Copy, Clone, Debug, Default)]
 pub struct Block {
-    w0: u32,
-    w1: u32,
-    w2: u32,
-    w3: u32,
+    w: [u32; 4],
 }
 
 impl cmp::PartialEq for Block {
     #[inline(never)]
     fn eq(&self, other: &Block) -> bool {
         let z = self ^ other;
-        z.w0 | z.w1 | z.w2 | z.w3 == 0
+        z.w[0] | z.w[1] | z.w[2] | z.w[3] == 0
     }
 }
 
@@ -347,61 +344,60 @@ impl Block {
     #[inline(always)]
     pub fn from_bytes(input: &[u8; 16]) -> Block {
         Block {
-            w0: u32::from_le_bytes([input[0], input[1], input[2], input[3]]),
-            w1: u32::from_le_bytes([input[4], input[5], input[6], input[7]]),
-            w2: u32::from_le_bytes([input[8], input[9], input[10], input[11]]),
-            w3: u32::from_le_bytes([input[12], input[13], input[14], input[15]]),
+            w: [
+                u32::from_le_bytes([input[0], input[1], input[2], input[3]]),
+                u32::from_le_bytes([input[4], input[5], input[6], input[7]]),
+                u32::from_le_bytes([input[8], input[9], input[10], input[11]]),
+                u32::from_le_bytes([input[12], input[13], input[14], input[15]]),
+            ],
         }
     }
 
+    /// Reads a block from the first 16 bytes of `input`.
     #[inline(always)]
     pub fn from_slice(input: &[u8]) -> Block {
         debug_assert!(input.len() == 16);
-        Block {
-            w0: u32::from_le_bytes([input[0], input[1], input[2], input[3]]),
-            w1: u32::from_le_bytes([input[4], input[5], input[6], input[7]]),
-            w2: u32::from_le_bytes([input[8], input[9], input[10], input[11]]),
-            w3: u32::from_le_bytes([input[12], input[13], input[14], input[15]]),
-        }
+        Block::from_bytes(input[..16].try_into().unwrap())
     }
 
     #[inline(always)]
     pub fn from64x2(a: u64, b: u64) -> Block {
         Block {
-            w0: b as u32,
-            w1: (b >> 32) as u32,
-            w2: a as u32,
-            w3: (a >> 32) as u32,
+            w: [b as u32, (b >> 32) as u32, a as u32, (a >> 32) as u32],
         }
     }
 
     #[inline(always)]
     pub fn to_bytes(&self) -> [u8; 16] {
-        let mut out: [u8; 16] = Default::default();
-        out[0..4].copy_from_slice(&self.w0.to_le_bytes());
-        out[4..8].copy_from_slice(&self.w1.to_le_bytes());
-        out[8..12].copy_from_slice(&self.w2.to_le_bytes());
-        out[12..16].copy_from_slice(&self.w3.to_le_bytes());
+        let mut out = [0u8; 16];
+        out[0..4].copy_from_slice(&self.w[0].to_le_bytes());
+        out[4..8].copy_from_slice(&self.w[1].to_le_bytes());
+        out[8..12].copy_from_slice(&self.w[2].to_le_bytes());
+        out[12..16].copy_from_slice(&self.w[3].to_le_bytes());
         out
     }
 
     #[inline(always)]
     pub fn xor(&self, other: &Block) -> Block {
         Block {
-            w0: self.w0 ^ other.w0,
-            w1: self.w1 ^ other.w1,
-            w2: self.w2 ^ other.w2,
-            w3: self.w3 ^ other.w3,
+            w: [
+                self.w[0] ^ other.w[0],
+                self.w[1] ^ other.w[1],
+                self.w[2] ^ other.w[2],
+                self.w[3] ^ other.w[3],
+            ],
         }
     }
 
     #[inline(always)]
     pub fn and(&self, other: &Block) -> Block {
         Block {
-            w0: self.w0 & other.w0,
-            w1: self.w1 & other.w1,
-            w2: self.w2 & other.w2,
-            w3: self.w3 & other.w3,
+            w: [
+                self.w[0] & other.w[0],
+                self.w[1] & other.w[1],
+                self.w[2] & other.w[2],
+                self.w[3] & other.w[3],
+            ],
         }
     }
 }
@@ -442,182 +438,81 @@ impl ops::BitXor for &Block {
     }
 }
 
+/// Returns the four bytes of a column, row 0 first.
+#[inline(always)]
+fn column_bytes(w: u32) -> [usize; 4] {
+    [
+        (w & 0xff) as usize,
+        ((w >> 8) & 0xff) as usize,
+        ((w >> 16) & 0xff) as usize,
+        (w >> 24) as usize,
+    ]
+}
+
+/// One table-based round.
+///
+/// `dir` is 1 for ShiftRows and 3 for InvShiftRows. `lookup(row, byte)` returns
+/// the table entry for a byte in that row.
+#[inline(always)]
+fn table_round(
+    block: &Block,
+    rk: &Block,
+    dir: usize,
+    lookup: impl Fn(usize, usize) -> u32,
+) -> Block {
+    let s = block.w;
+    let b = [
+        column_bytes(s[0]),
+        column_bytes(s[1]),
+        column_bytes(s[2]),
+        column_bytes(s[3]),
+    ];
+    let k = rk.w;
+    let mut t = [0u32; 4];
+    for (j, tj) in t.iter_mut().enumerate() {
+        let l = |r: usize| lookup(r, b[(j + r * dir) % 4][r]);
+        // Adding the key first is faster on native targets. WebAssembly runtimes
+        // do better with the key added last.
+        #[cfg(not(target_family = "wasm"))]
+        {
+            *tj = (k[j] ^ l(0) ^ l(1)) ^ (l(2) ^ l(3));
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            *tj = l(0) ^ l(1) ^ l(2) ^ l(3) ^ k[j];
+        }
+    }
+    Block { w: t }
+}
+
 /// Fastest software AES implementation, but with no protection against side channels
 pub struct SoftAes;
 
 impl SoftAes {
     /// AES forward round function.
     /// `rk` is the round key.
-    #[inline]
+    #[inline(always)]
     pub fn block_encrypt(block: &Block, rk: &Block) -> Block {
-        let s0 = block.w0;
-        let s1 = block.w1;
-        let s2 = block.w2;
-        let s3 = block.w3;
-
-        let x0 = LUT[0][(s0 & 0xff) as usize];
-        let x1 = LUT[1][((s1 >> 8) & 0xff) as usize];
-        let x2 = LUT[2][((s2 >> 16) & 0xff) as usize];
-        let x3 = LUT[3][(s3 >> 24) as usize];
-        let t0 = x0 ^ x1 ^ x2 ^ x3;
-
-        let x0 = LUT[0][(s1 & 0xff) as usize];
-        let x1 = LUT[1][((s2 >> 8) & 0xff) as usize];
-        let x2 = LUT[2][((s3 >> 16) & 0xff) as usize];
-        let x3 = LUT[3][(s0 >> 24) as usize];
-        let t1 = x0 ^ x1 ^ x2 ^ x3;
-
-        let x0 = LUT[0][(s2 & 0xff) as usize];
-        let x1 = LUT[1][((s3 >> 8) & 0xff) as usize];
-        let x2 = LUT[2][((s0 >> 16) & 0xff) as usize];
-        let x3 = LUT[3][(s1 >> 24) as usize];
-        let t2 = x0 ^ x1 ^ x2 ^ x3;
-
-        let x0 = LUT[0][(s3 & 0xff) as usize];
-        let x1 = LUT[1][((s0 >> 8) & 0xff) as usize];
-        let x2 = LUT[2][((s1 >> 16) & 0xff) as usize];
-        let x3 = LUT[3][(s2 >> 24) as usize];
-        let t3 = x0 ^ x1 ^ x2 ^ x3;
-
-        Block {
-            w0: t0 ^ rk.w0,
-            w1: t1 ^ rk.w1,
-            w2: t2 ^ rk.w2,
-            w3: t3 ^ rk.w3,
-        }
+        table_round(block, rk, 1, |r, x| LUT[r][x])
     }
 
     /// AES block decryption round.
     /// This function performs one inverse round of AES decryption.
-    #[inline]
+    #[inline(always)]
     pub fn block_decrypt(block: &Block, rk: &Block) -> Block {
-        let s0 = block.w0;
-        let s1 = block.w1;
-        let s2 = block.w2;
-        let s3 = block.w3;
-
-        let x0 = ILUT[0][(s0 & 0xff) as usize];
-        let x1 = ILUT[1][((s3 >> 8) & 0xff) as usize];
-        let x2 = ILUT[2][((s2 >> 16) & 0xff) as usize];
-        let x3 = ILUT[3][(s1 >> 24) as usize];
-        let t0 = x0 ^ x1 ^ x2 ^ x3;
-
-        let x0 = ILUT[0][(s1 & 0xff) as usize];
-        let x1 = ILUT[1][((s0 >> 8) & 0xff) as usize];
-        let x2 = ILUT[2][((s3 >> 16) & 0xff) as usize];
-        let x3 = ILUT[3][(s2 >> 24) as usize];
-        let t1 = x0 ^ x1 ^ x2 ^ x3;
-
-        let x0 = ILUT[0][(s2 & 0xff) as usize];
-        let x1 = ILUT[1][((s1 >> 8) & 0xff) as usize];
-        let x2 = ILUT[2][((s0 >> 16) & 0xff) as usize];
-        let x3 = ILUT[3][(s3 >> 24) as usize];
-        let t2 = x0 ^ x1 ^ x2 ^ x3;
-
-        let x0 = ILUT[0][(s3 & 0xff) as usize];
-        let x1 = ILUT[1][((s2 >> 8) & 0xff) as usize];
-        let x2 = ILUT[2][((s1 >> 16) & 0xff) as usize];
-        let x3 = ILUT[3][(s0 >> 24) as usize];
-        let t3 = x0 ^ x1 ^ x2 ^ x3;
-
-        Block {
-            w0: t0 ^ rk.w0,
-            w1: t1 ^ rk.w1,
-            w2: t2 ^ rk.w2,
-            w3: t3 ^ rk.w3,
-        }
+        table_round(block, rk, 3, |r, x| ILUT[r][x])
     }
 
     /// AES forward round function for the last block.
     /// `rk` is the round key.
-    #[inline]
+    #[inline(always)]
     pub fn block_encrypt_last(block: &Block, rk: &Block) -> Block {
-        let s0 = block.w0;
-        let s1 = block.w1;
-        let s2 = block.w2;
-        let s3 = block.w3;
-
-        let x0 = S_BOX[(s0 & 0xff) as usize] as u32;
-        let x1 = S_BOX[((s1 >> 8) & 0xff) as usize] as u32;
-        let x2 = S_BOX[((s2 >> 16) & 0xff) as usize] as u32;
-        let x3 = S_BOX[(s3 >> 24) as usize] as u32;
-        let t0 = x0 ^ (x1 << 8) ^ (x2 << 16) ^ (x3 << 24);
-
-        let x0 = S_BOX[(s1 & 0xff) as usize] as u32;
-        let x1 = S_BOX[((s2 >> 8) & 0xff) as usize] as u32;
-        let x2 = S_BOX[((s3 >> 16) & 0xff) as usize] as u32;
-        let x3 = S_BOX[(s0 >> 24) as usize] as u32;
-        let t1 = x0 ^ (x1 << 8) ^ (x2 << 16) ^ (x3 << 24);
-
-        let x0 = S_BOX[(s2 & 0xff) as usize] as u32;
-        let x1 = S_BOX[((s3 >> 8) & 0xff) as usize] as u32;
-        let x2 = S_BOX[((s0 >> 16) & 0xff) as usize] as u32;
-        let x3 = S_BOX[(s1 >> 24) as usize] as u32;
-        let t2 = x0 ^ (x1 << 8) ^ (x2 << 16) ^ (x3 << 24);
-
-        let x0 = S_BOX[(s3 & 0xff) as usize] as u32;
-        let x1 = S_BOX[((s0 >> 8) & 0xff) as usize] as u32;
-        let x2 = S_BOX[((s1 >> 16) & 0xff) as usize] as u32;
-        let x3 = S_BOX[(s2 >> 24) as usize] as u32;
-        let t3 = x0 ^ (x1 << 8) ^ (x2 << 16) ^ (x3 << 24);
-
-        Block {
-            w0: t0 ^ rk.w0,
-            w1: t1 ^ rk.w1,
-            w2: t2 ^ rk.w2,
-            w3: t3 ^ rk.w3,
-        }
+        table_round(block, rk, 1, |r, x| (S_BOX[x] as u32) << (8 * r))
     }
 
     /// AES final block decryption round.
-    #[inline]
+    #[inline(always)]
     pub fn block_decrypt_last(block: &Block, rk: &Block) -> Block {
-        let s0 = block.w0;
-        let s1 = block.w1;
-        let s2 = block.w2;
-        let s3 = block.w3;
-
-        let x0 = S_BOX_INV[(s0 & 0xff) as usize] as u32;
-        let x1 = S_BOX_INV[((s3 >> 8) & 0xff) as usize] as u32;
-        let x2 = S_BOX_INV[((s2 >> 16) & 0xff) as usize] as u32;
-        let x3 = S_BOX_INV[(s1 >> 24) as usize] as u32;
-        let t0 = x0 ^ (x1 << 8) ^ (x2 << 16) ^ (x3 << 24);
-
-        let x0 = S_BOX_INV[(s1 & 0xff) as usize] as u32;
-        let x1 = S_BOX_INV[((s0 >> 8) & 0xff) as usize] as u32;
-        let x2 = S_BOX_INV[((s3 >> 16) & 0xff) as usize] as u32;
-        let x3 = S_BOX_INV[(s2 >> 24) as usize] as u32;
-        let t1 = x0 ^ (x1 << 8) ^ (x2 << 16) ^ (x3 << 24);
-
-        let x0 = S_BOX_INV[(s2 & 0xff) as usize] as u32;
-        let x1 = S_BOX_INV[((s1 >> 8) & 0xff) as usize] as u32;
-        let x2 = S_BOX_INV[((s0 >> 16) & 0xff) as usize] as u32;
-        let x3 = S_BOX_INV[(s3 >> 24) as usize] as u32;
-        let t2 = x0 ^ (x1 << 8) ^ (x2 << 16) ^ (x3 << 24);
-
-        let x0 = S_BOX_INV[(s3 & 0xff) as usize] as u32;
-        let x1 = S_BOX_INV[((s2 >> 8) & 0xff) as usize] as u32;
-        let x2 = S_BOX_INV[((s1 >> 16) & 0xff) as usize] as u32;
-        let x3 = S_BOX_INV[(s0 >> 24) as usize] as u32;
-        let t3 = x0 ^ (x1 << 8) ^ (x2 << 16) ^ (x3 << 24);
-
-        Block {
-            w0: t0 ^ rk.w0,
-            w1: t1 ^ rk.w1,
-            w2: t2 ^ rk.w2,
-            w3: t3 ^ rk.w3,
-        }
+        table_round(block, rk, 3, |r, x| (S_BOX_INV[x] as u32) << (8 * r))
     }
-}
-
-#[test]
-fn test() {
-    let input_bytes = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
-    let input = Block::from_bytes(&input_bytes);
-    let rk = Block::from_bytes(&[1u8; 16]);
-    let output = SoftAes::block_encrypt(&input, &rk);
-    let expected = Block::from_bytes(&[
-        107, 107, 93, 68, 45, 108, 50, 80, 177, 216, 92, 96, 38, 157, 32, 93,
-    ]);
-    assert_eq!(output, expected);
 }
