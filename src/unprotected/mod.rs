@@ -3,8 +3,7 @@
 use core::{cmp, ops};
 
 pub mod key_schedule;
-use crate::key_schedule::S_BOX;
-use key_schedule::S_BOX_INV;
+use key_schedule::{S_BOX, S_BOX_INV};
 
 const LUT: [[u32; 256]; 4] = [
     [

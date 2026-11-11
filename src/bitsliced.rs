@@ -252,14 +252,25 @@ pub(crate) fn inv_mix_columns(x: u64) -> u64 {
     mix_columns(x ^ mul4(t))
 }
 
-/// SubBytes followed by ShiftRows.
 #[inline(always)]
-fn sub_bytes_shift_rows(block: &Block) -> (u64, u64) {
-    let (lo, hi) = permute_rows(block.lo, block.hi, ROWS_A, ROWS_B);
+fn sub_bytes(lo: u64, hi: u64) -> (u64, u64) {
     let mut planes = load(lo, hi);
     sbox_core(&mut planes);
     let (lo, hi) = store(&planes);
     (lo ^ C63, hi ^ C63)
+}
+
+/// SubWord for the key schedule, in constant time like the rounds.
+#[inline]
+pub(crate) fn sub_word(w: u32) -> u32 {
+    sub_bytes(w as u64, 0).0 as u32
+}
+
+/// SubBytes followed by ShiftRows.
+#[inline(always)]
+fn sub_bytes_shift_rows(block: &Block) -> (u64, u64) {
+    let (lo, hi) = permute_rows(block.lo, block.hi, ROWS_A, ROWS_B);
+    sub_bytes(lo, hi)
 }
 
 /// InvShiftRows followed by InvSubBytes.
