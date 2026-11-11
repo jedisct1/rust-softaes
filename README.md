@@ -101,9 +101,10 @@ Both paths carry a `key_schedule` module with the same interface:
   decryption schedule, reversing the round-key order and applying InvMixColumns
   to every key except the first and last.
 
-The constant-time `key_schedule` runs its S-box lookups in constant time; the one
-under `unprotected` uses a direct table. Both produce identical round keys, and
-the expansions are checked against the FIPS 197 Appendix C test vectors.
+The constant-time `key_schedule` computes the S-box with the same bitsliced
+circuit as the rounds, so it reads no table. The one under `unprotected` uses a
+direct table lookup. Both produce identical round keys, and the expansions are
+checked against the FIPS 197 Appendix C test vectors.
 
 ## License
 

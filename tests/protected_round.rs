@@ -1,5 +1,5 @@
-use softaes::unprotected::{Block as UBlock, SoftAes as USoftAes};
-use softaes::{Block, SoftAes};
+use softaes::unprotected::{self, Block as UBlock, SoftAes as USoftAes};
+use softaes::{key_schedule, Block, SoftAes};
 
 // A tiny xorshift generator so the test stays deterministic without rand.
 fn next(state: &mut u64) -> u64 {
@@ -51,5 +51,15 @@ fn protected_rounds_match_table_rounds() {
             USoftAes::block_decrypt_last(&u, &urk).to_bytes(),
             "block_decrypt_last"
         );
+    }
+}
+
+#[test]
+fn protected_key_schedule_matches_table_key_schedule() {
+    // With every key byte set to `b`, each byte of the first SubWord input is `b`. This covers the whole S-box.
+    for b in 0..=255 {
+        let p = key_schedule::key_expansion_128(&[b; 16]).map(|k| k.to_bytes());
+        let u = unprotected::key_schedule::key_expansion_128(&[b; 16]).map(|k| k.to_bytes());
+        assert_eq!(p, u);
     }
 }
